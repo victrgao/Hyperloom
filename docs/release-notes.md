@@ -20,6 +20,14 @@ Merged to `main` and not yet carried by a tagged release. Each entry moves
 into the [release](https://github.com/AMD-AGI/Hyperloom/releases) that ships
 it.
 
+- **A hosted multi-branch test closes its sandbox when it ends.**
+  Make-before-break, which kept a finished test's sandbox until the next
+  test's ran where the grant fit at least three tests, is removed. A hosted
+  session now runs `min(max_gpus // tp, max_sandboxes)` tests at once, one
+  more than before on such a grant, and each test's sandbox queues for a
+  node. `hyperloom-multibranch run` no longer takes
+  `--[no-]make-before-break`. `multibranch.make_before_break` in a campaign
+  spec is accepted and ignored, with a warning in the log.
 - **A hosted multi-branch run sets the AgentX window and the server boot
   budget.** The campaign spec's `multibranch` block takes
   `agentx_duration_sec` and `agentx_objective` (for `workload: agentx` only),
