@@ -64,6 +64,15 @@ Framework run row carries `ensemble_scores` any more. Only a run launched with
 a breakdown whose action row holds the key no longer validates against the
 packaged schema. Consumers that read it should stop.
 
+### Required: Experience KB reads take signals, and the planner variables go
+
+* `LOCAL_KB_PLANNER_MODEL`, `LOCAL_KB_PLANNER_TIMEOUT_SECONDS` and
+  `LOCAL_KB_PLANNER_MAX_OUTPUT_TOKENS` are no longer read and are silently
+  ignored, so drop them. The Experience KB service calls no model.
+* `POST /v1/read` refuses the former `decision` and `context` fields with 400.
+  A caller outside Hyperloom sends `signals` instead; see
+  [`POST /v1/read`](experience-kb.md#post-v1read).
+
 ---
 
 ## Upgrading from 1.1.x
