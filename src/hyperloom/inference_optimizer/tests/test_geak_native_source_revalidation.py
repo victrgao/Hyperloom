@@ -147,7 +147,7 @@ async def test_unkept_measurement_settles_no_promote_without_promotion(coordinat
     assert state.geak_result["revalidation_status"] == "no_promote"
     assert state.geak_result["revalidation_error"] == "canonical replay did not improve"
     assert not state.optimization_stack
-    assert geak_candidate_is_adjudicated(state.geak_result, reported, harness_can_replay=False)
+    assert geak_candidate_is_adjudicated(state.geak_result, reported)
 
 
 @pytest.mark.asyncio
@@ -183,7 +183,7 @@ async def test_unmeasured_integration_settles_failed_and_stays_open(coordinator,
     assert state.geak_pending == {}
     assert state.current_best == _INCUMBENT
     assert not state.optimization_stack
-    assert not geak_candidate_is_adjudicated(state.geak_result, reported, harness_can_replay=False)
+    assert not geak_candidate_is_adjudicated(state.geak_result, reported)
 
 
 def _framework_tree(tmp_path, monkeypatch):
@@ -279,7 +279,7 @@ async def test_bench_that_graded_nothing_settles_failed_and_stays_open(
     assert state.current_best["tput"] == _INCUMBENT["tput"]
     assert not state.optimization_stack
     assert (repo / "kernel.py").read_text() == "old\n"
-    assert not geak_candidate_is_adjudicated(state.geak_result, reported, harness_can_replay=False)
+    assert not geak_candidate_is_adjudicated(state.geak_result, reported)
 
 
 @pytest.mark.asyncio
@@ -291,7 +291,7 @@ async def test_failed_round_in_a_session_graded_on_output_throughput_stays_open(
     state = coordinator.shared_state
     assert state.geak_result["revalidation_status"] == "failed"
     assert (repo / "kernel.py").read_text() == "old\n"
-    assert not geak_candidate_is_adjudicated(state.geak_result, reported, harness_can_replay=False)
+    assert not geak_candidate_is_adjudicated(state.geak_result, reported)
 
 
 @pytest.mark.asyncio
@@ -304,7 +304,7 @@ async def test_graded_bench_below_the_keep_bar_settles_no_promote(coordinator, t
     assert "did not clear the interactivity KEEP gate" in state.geak_result["revalidation_error"]
     assert not state.optimization_stack
     assert (repo / "kernel.py").read_text() == "old\n"
-    assert geak_candidate_is_adjudicated(state.geak_result, reported, harness_can_replay=False)
+    assert geak_candidate_is_adjudicated(state.geak_result, reported)
 
 
 @pytest.mark.asyncio
@@ -327,7 +327,7 @@ async def test_cleared_candidate_whose_keep_cannot_be_committed_stays_open(coord
     assert state.geak_result["revalidation_error"] == "git commit failed"
     assert not state.optimization_stack
     assert (repo / "kernel.py").read_text() == "old\n"
-    assert not geak_candidate_is_adjudicated(state.geak_result, reported, harness_can_replay=False)
+    assert not geak_candidate_is_adjudicated(state.geak_result, reported)
 
 
 @pytest.mark.asyncio
@@ -507,6 +507,6 @@ def test_adjudicated_source_result_reopens_only_when_artifact_changes(coordinato
         "native_source_revalidation": {"params": params, "status": "validated"},
         "canonical_revalidation": {"output_throughput": 120.0},
     }
-    assert geak_candidate_is_adjudicated(settled, raw, harness_can_replay=False)
+    assert geak_candidate_is_adjudicated(settled, raw)
     patch.write_text(patch.read_text().replace("+new", "+changed"))
-    assert not geak_candidate_is_adjudicated(settled, raw, harness_can_replay=False)
+    assert not geak_candidate_is_adjudicated(settled, raw)
