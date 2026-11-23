@@ -253,8 +253,8 @@ class _RenderMixin:
         elif geak_pending_status in GEAK_DROPPED_STATUSES:
             geak_pending_tag = f" ⚠ geak candidate dropped unvalidated ({geak_pending_status})"
         elif geak_revalidation_status in REBENCH_FAILED_STATUSES and not geak_in_stack:
-            # A fallback rebench that also failed is the same unjudged drop; only ``no_material`` / ``no_promote`` are
-            # verdicts and stay silent here.
+            # A failed revalidation is the same unjudged drop; only ``no_material`` / ``no_promote`` are verdicts and
+            # stay silent here.
             geak_pending_tag = f" ⚠ geak candidate dropped unvalidated (rebench_{geak_revalidation_status})"
         else:
             geak_pending_tag = ""
