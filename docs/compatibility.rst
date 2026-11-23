@@ -43,7 +43,7 @@ The following table lists the minimum requirements for running Hyperloom.
 +=====================+========================================================+
 | AMD Instinct™ GPU   | MI300X, MI325X, MI355X                                 |
 +---------------------+--------------------------------------------------------+
-| AMD Radeon™ GPU     | Radeon AI PRO R9700 (gfx1201), vLLM and llama.cpp only |
+| AMD Radeon™ GPU     | Radeon AI PRO R9700 (gfx1201), on vLLM and llama.cpp   |
 +---------------------+--------------------------------------------------------+
 | Operating System    | Ubuntu 24.04 (recommended); Ubuntu 22.04 (legacy)      |
 +---------------------+--------------------------------------------------------+
@@ -58,6 +58,14 @@ The following table lists the minimum requirements for running Hyperloom.
 +---------------------+--------------------------------------------------------+
 | Kernel Languages    | HIP, Triton, FlyDSL                                    |
 +---------------------+--------------------------------------------------------+
+
+.. note::
+
+  Hyperloom keeps no list of supported GPUs. It reads each card's architecture,
+  compute units, memory and clocks from ``amd-smi static`` at session start, so
+  a GPU outside this table runs too, untested: with no recipe tuned for it and
+  no default launch row for its architecture, the framework starts from its
+  untuned fallback launch.
 
 Component support matrix
 ========================
