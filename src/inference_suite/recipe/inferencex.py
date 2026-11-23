@@ -47,7 +47,6 @@ from inference_suite.recipe.model import (
     VLLM_ENTRYPOINT,
     VLLM_RUNNER_OWNED,
     adaptive_verification_reason,
-    boards_interchangeable,
 )
 
 INFERENCEX_REPO = "https://github.com/SemiAnalysisAI/InferenceX"
@@ -511,18 +510,13 @@ def agentx_trace(bundle: RepoBundle, models: Sequence[str]) -> str:
     return _UNCAPPED_TRACE
 
 
-def _warnings(point: InferencexPoint, query: LaunchQuery, target: int) -> tuple[str, ...]:
-    warnings = []
-    if point.conc != target:
-        warnings.append(f"InferenceX has no point at concurrency {target} in {point.arm_key}; took {point.conc}")
-    if point.board != query.board:
-        warnings.append(f"InferenceX tuned {point.entry} on {point.board}, not {query.board}")
-    return tuple(warnings)
+def _warnings(point: InferencexPoint, target: int) -> tuple[str, ...]:
+    if point.conc == target:
+        return ()
+    return (f"InferenceX has no point at concurrency {target} in {point.arm_key}; took {point.conc}",)
 
 
-def _launch(
-    point: InferencexPoint, query: LaunchQuery, snapshot: InferencexSnapshot, target: int
-) -> SourceLaunch | str:
+def _launch(point: InferencexPoint, snapshot: InferencexSnapshot, target: int) -> SourceLaunch | str:
     """The launch ``point`` binds, or why this source cannot reproduce it."""
     if point.key in snapshot.rejections:
         return f"InferenceX refused it: {snapshot.rejections[point.key]}"
@@ -566,7 +560,7 @@ def _launch(
         golden=_golden(point, selection, bundle, engine, command.args),
         kv_offloading=point.kv_offloading or _UNSET,
         stripped=command.stripped,
-        warnings=_warnings(point, query, target),
+        warnings=_warnings(point, target),
     )
 
 
@@ -622,7 +616,7 @@ def inferencex_model_id(model_id: str, bundle: RepoBundle) -> str | None:
 
 
 def served_points(query: LaunchQuery, bundle: RepoBundle) -> ServedPoints:
-    """The points of ``bundle`` that serve ``query``'s model with its framework on a board interchangeable with its own:
+    """The points of ``bundle`` that serve ``query``'s model with its framework on its board:
     every point a snapshot must record InferenceX's selection for to answer ``query``.
 
     Only the entries of that model and framework are read, so one InferenceX cannot place does not stop the others.
@@ -638,7 +632,7 @@ def served_points(query: LaunchQuery, bundle: RepoBundle) -> ServedPoints:
         except (RecipeSourceError, KeyError) as error:
             unread[name] = f"InferenceX's config does not place it: {error}"
             continue
-        points += [point for point in placed if boards_interchangeable(query.board, point.board)]
+        points += [point for point in placed if point.board == query.board]
     return ServedPoints(tuple(points), unread)
 
 
@@ -662,9 +656,7 @@ def inferencex_launches(query: LaunchQuery, snapshot: InferencexSnapshot) -> tup
     for arm_key, points in arms.items():
         point = _arm_point(points, target)
         launch = (
-            f"it has no point at concurrency {target} or above"
-            if point is None
-            else _launch(point, query, snapshot, target)
+            f"it has no point at concurrency {target} or above" if point is None else _launch(point, snapshot, target)
         )
         if isinstance(launch, str):
             reasons[arm_key] = launch
