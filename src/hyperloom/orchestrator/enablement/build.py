@@ -60,12 +60,6 @@ def _targeted_build_unavailable() -> bool:
     return is_multi_node()
 
 
-def _session_gfx() -> str:
-    """The arch a targeted build compiles for: the session card's; empty when the session read no card."""
-    card = gpu_card.session_card()
-    return card.gfx if card else ""
-
-
 def _compiled_gap_component(framework: str, symbol: str, launch_log: str) -> str:
     """The component a compiled-miss build targets, picked from the failure evidence.
 
@@ -210,7 +204,7 @@ class EnablementBuild(CoordinatorCollaborator):
             reason=reason,
             repo_url=repo_url,
             ref=ref,
-            gpu_arch=_session_gfx(),
+            gpu_arch=gpu_card.session_gfx(),
             source_pr_url=source_pr_url,
         )
         task_id = await self._coord.build_lifecycle.enqueue_targeted_build(action)
@@ -314,7 +308,7 @@ class EnablementBuild(CoordinatorCollaborator):
             reason=f"specialist request: {reason}",
             repo_url=repo_url,
             ref=ref,
-            gpu_arch=_session_gfx(),
+            gpu_arch=gpu_card.session_gfx(),
             source_pr_url=source_pr_url,
         )
 
