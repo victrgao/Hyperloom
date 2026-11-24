@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 from unittest.mock import patch
 
@@ -220,8 +221,11 @@ def test_returns_none_when_an_input_is_unavailable(meta: ModelMeta | None, state
     assert block is None
 
 
-def test_returns_none_when_the_session_read_no_card(monkeypatch, stub_meta: ModelMeta) -> None:
+@pytest.mark.parametrize("card", [None, dataclasses.replace(MI355X_CARD, memory_bandwidth_gbps=None)])
+def test_returns_none_when_the_session_has_no_card_bandwidth(monkeypatch, stub_meta: ModelMeta, card) -> None:
     monkeypatch.delenv(SESSION_CARD_ENV)
+    if card is not None:
+        publish_card(monkeypatch, card)
     block = build_roofline_ceiling(
         _make_state(), ArmCurves(baseline=[], optimized=[]), concs=[1, 8], isl=1024, osl=1024
     )
