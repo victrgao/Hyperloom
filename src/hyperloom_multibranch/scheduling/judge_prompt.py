@@ -109,6 +109,13 @@ Specialist branches explore optimizations in parallel; the integration branch me
 Each branch has K, the number of tests it may run at once. Within the hard caps you are given, decide:
 how many branches to open, each branch's K (the integration branch included), which specialist branches to stop and
 why, and whether the whole session should stop early.
+K is your lever on how the branches share the cards. A specialist submits every independent candidate it has for its
+head as each is ready; K of them run at once and the rest wait for a card. A specialist branch opens at
+max_k_per_branch, and you lower or raise it from there, branch by branch. Lower the K of a branch that floods the queue
+with tests of little value, its judged_since_commit running up while its expected_gain_pct stays low, and of the
+branches expected to gain least while queued_tests stays high and tests of branches expected to gain more wait. Raise
+the K of a branch whose tests_queued is above 0 while idle_test_slots is above 0: cards idle while its candidates wait
+behind its K. A lower K withdraws no test: those running go on, and the branch's next starts once fewer than K run.
 You may open branches at any call. opening is true only for the call that sizes the opening batch, which opens from the
 commit EXPLORE started on — the root commit, or the Recipe KB champion PRELUDE replayed onto it — at least one branch
 unless user branches opened already (an agent's branch does not count). A branch opened at a later call starts from the
@@ -223,7 +230,6 @@ Answer with exactly ONE JSON object and nothing after it."""
 #: What every user prompt ends with: the shape of the judge's reply.
 REPLY_FORMAT = """Reply with one JSON object of this shape:
 {"open": <int, branches to open now; 0 opens none>,
- "open_k": <int, the K of every branch opened now>,
  "focus": ["<op the first branch opened now should speed up>", ...] (optional; null for a branch you leave to the
   default),
  "branches": [{"branch": "<branch id>", "k": <int>}],

@@ -70,7 +70,6 @@ from hyperloom_multibranch.scheduling.widening import WideningSignals
 logger = logging.getLogger(__name__)
 
 _KEY_OPEN = "open"
-_KEY_OPEN_K = "open_k"
 _KEY_FOCUS = "focus"
 _KEY_BRANCHES = "branches"
 _KEY_STOP = "stop"
@@ -329,13 +328,11 @@ class HeldOrder:
 class JudgeDecision:
     """A non-empty ``session_stop`` is the reason the judge asks for a soft stop of the session.
 
-    ``open_k`` is the K of the branches opened now; a K order cannot name them before they exist. ``focus`` is the op
-    the judge names for each branch opened now, in the order they open; ``""`` and a branch past its end leave the
+    ``focus`` is the op the judge names for each branch opened now, in the order they open; ``""`` and a branch past its end leave the
     branch to the default focus. ``held`` names the branches whose stop or lower K was refused, once each.
     """
 
     open_count: int = 0
-    open_k: int = 1
     focus: tuple[str, ...] = ()
     k: tuple[KOrder, ...] = ()
     stop: tuple[StopOrder, ...] = ()
@@ -551,7 +548,6 @@ def parse_decision(reply: str) -> JudgeDecision | None:
     try:
         return JudgeDecision(
             open_count=_int_field(payload, _KEY_OPEN),
-            open_k=_int_field(payload, _KEY_OPEN_K) if _KEY_OPEN_K in payload else 1,
             focus=_focus(payload),
             k=tuple(
                 KOrder(_str_field(item, _KEY_BRANCH), _int_field(item, "k"))
@@ -593,7 +589,6 @@ def cap_decision(decision: JudgeDecision, view: JudgeView) -> JudgeDecision:
     opened = min(max(decision.open_count, floor), view.caps.max_branches)
     return JudgeDecision(
         open_count=opened,
-        open_k=view.caps.clamp_k(decision.open_k, BranchKind.SPECIALIST),
         focus=decision.focus[:opened],
         k=tuple(ks.values()),
         stop=tuple(asked.values()),
