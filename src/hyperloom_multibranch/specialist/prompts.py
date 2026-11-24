@@ -217,8 +217,8 @@ only by setting it in extra_envs. For source, \
 call worktree_sync, edit the files in your worktree, and call worktree_check with the component until it passes (the \
 files compile and the package imports with your change); then worktree_patch returns the delta and the parent commit \
 to test. When your change adds a code path, put a one-time log line on the path it adds, and when its result is \
-flat or worse, check the test's server.log shows that line before you call the idea dead: a patch that never ran \
-measured nothing. Submit the delta worktree_patch returns as it is: for a component new on your head it names the \
+flat or worse, check with a probe that the server's log shows that line before you call the idea dead: a patch that \
+never ran measured nothing. Submit the delta worktree_patch returns as it is: for a component new on your head it names the \
 upstream commit already, and you set them only when its reply carries a note saying so; never set upstream_ref or \
 upstream_repo on a component your head already has, which the toolbox refuses as upstream_label_unsupported. A replayable champion in the brief that the integration head does not hold: get its delta with blackboard_replay and test it on your head before other \
 directions. A lead whose gain the brief or blackboard_replay says was measured on another image is \
@@ -440,9 +440,26 @@ name every change in its mechanism and give as target_share_pct the summed share
 """
 
 
+_PROBE = (
+    "A probe is how you look at something on a GPU without paying for a full test: it runs a bash script of yours in a "
+    "test's sandbox, with your patch applied, and measures nothing. Call probe_case with the script, then submit_test "
+    'with kind "repro", purpose "probe", your head as the parent commit, the delta to look at (none for your head as '
+    "it is) and the attachment probe_case returned in attachments. With needs_server false no server is started and "
+    "the script has the test's cards: time a kernel alone inside a CUDA graph, pick a tile configuration, check that a "
+    "patch imports and takes the path you expect. Run Python as $HL_PYTHON, the server's interpreter, which imports "
+    "your patch first; $HL_MODEL is the model. With needs_server true the test boots its server and the script runs "
+    "against it at $HL_BASE_URL, with the server's live log at $HL_SERVER_LOG: grep the log for the line your change "
+    "prints, or send the request that shows a defect. test_result returns the script's exit code, the end of what it "
+    "printed and the small files it wrote to $HL_OUTPUT_DIR, so print the answer last and keep it short. A probe takes "
+    "no slot of your K and is never judged; your branch has one at a time, the script is killed at the time limit "
+    "probe_case names, and one that needs a server still waits for that server's boot. Its numbers never enter the "
+    "gate: do not "
+    "commit, claim or conclude a gain on them. Never raise an error inside a full test to carry a diagnostic out: the "
+    "test is lost, and its failure reason keeps only the start of the message."
+)
 _NO_GPU = (
     "Do not start servers or benchmarks yourself: the toolbox measures every test in a fresh sandbox. You have no GPU "
-    "of your own: submit_test is how you measure."
+    f"of your own: submit_test is how you measure. {_PROBE}"
 )
 _DEV_SANDBOX = (
     "Do not start servers or benchmarks yourself outside your dev sandbox: the toolbox measures every test in a fresh "
@@ -456,7 +473,7 @@ _DEV_SANDBOX = (
     "cards, numbered from 0 (never set HIP_VISIBLE_DEVICES, ROCR_VISIBLE_DEVICES or CUDA_VISIBLE_DEVICES), listen "
     "only on the ports the lease names, and write under the lease's root, never in your worktree. Release it with "
     "dev_sandbox_release as soon as you are done: the runtime takes it back when it expires, sits idle or tests "
-    "queue for cards. When a lease is refused, submit the full test instead of waiting.\n\n"
+    f"queue for cards. When a lease is refused, submit a probe or the full test instead of waiting. {_PROBE}\n\n"
     "Forge, a kernel optimizer you may call on a hot kernel, runs for hours: lease it with term=long (up to 6 h, kept "
     "while its process runs). forge-fuse finds a fusion in the code by itself, or around a kernel you name, from a "
     "decode trace without CUDA graphs; forge-fuse checks its fusion by serving the model at the session's TP: lease "

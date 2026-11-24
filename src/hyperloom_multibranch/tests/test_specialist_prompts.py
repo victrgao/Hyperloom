@@ -64,6 +64,7 @@ TOOLS = (
     "request_repair",
     "decline_repair",
     "fix_case",
+    "probe_case",
 )
 
 
@@ -89,6 +90,16 @@ def test_the_role_names_the_workload_every_step_s_tool_and_the_rules():
     assert prompt.index("blackboard_learn, citing the candidate") < prompt.index("then call decline_repair")
     with pytest.raises(ValueError, match="names the workload"):
         role_prompt(RoleWorkload(" \n"))
+
+
+@pytest.mark.parametrize("dev_leases", [0, 1])
+def test_the_role_says_a_probe_is_how_to_look_at_a_gpu_whether_or_not_the_session_lends_dev_sandboxes(dev_leases):
+    prompt = " ".join(role_prompt(WORKLOAD, dev_leases=dev_leases).split())
+
+    assert 'submit_test with kind "repro", purpose "probe"' in prompt
+    assert "With needs_server false no server is started" in prompt and "$HL_SERVER_LOG" in prompt
+    assert "Its numbers never enter the gate" in prompt
+    assert "Never raise an error inside a full test to carry a diagnostic out" in prompt
 
 
 def test_the_role_reads_the_briefs_two_direction_lists_before_claiming_and_chooses_as_before_without_them():
