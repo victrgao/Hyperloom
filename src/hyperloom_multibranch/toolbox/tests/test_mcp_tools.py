@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import io
 import json
 import random
+import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -18,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from hyperloom.contracts.measurement import TestRequest
+from hyperloom.contracts.measurement import AttachmentRef, Purpose, TestKind, TestRequest
 from hyperloom.hosted.mcp_server import (
     HOST_KIND,
     SPECIALIST_KIND,
@@ -70,6 +73,12 @@ class FakeToolbox:
         self.cancelled: list[str] = []
         self.refuse: Exception | None = None
         self.progress_of: dict[str, TestProgress] = {}
+        self.attachments: dict[str, bytes] = {}
+
+    async def put_attachment(self, attachment_id: str, kind: str, data: bytes) -> AttachmentRef:
+        ref = AttachmentRef(attachment_id, kind, f"{len(self.attachments) + 1:064x}")  # type: ignore[arg-type]
+        self.attachments[ref.sha256] = data
+        return ref
 
     async def submit_test(self, request: TestRequest) -> str:
         if self.refuse is not None:
@@ -191,7 +200,7 @@ def test_a_specialist_sees_exactly_the_specialist_tools(rig: Rig) -> None:
     names = sorted(tool["name"] for tool in reply["result"]["tools"])
     assert names == sorted(
         ["submit_test", "test_result", "wait_test", "cancel_test", "queue_state", "poll_inbox", "start_analysis"]
-        + ["put_kernel_artifact"]
+        + ["put_kernel_artifact", "probe_case"]
         + [f"blackboard_{name}" for name in ("lookup", "claim", "release", "search", "record", "branch_log")]
         + [
             "blackboard_append_branch_log",
@@ -236,26 +245,41 @@ def test_a_specialist_cannot_submit_a_purpose_the_session_owns(rig: Rig, purpose
     """The queue exempts the session's purposes from the branch's K and backpressure, or ranks them above an explore."""
     _, reply = rig.call(rig.token("s1"), "submit_test", kind="test", purpose=purpose, parent_commit="c1")
     assert reply["error"]["code"] == -32602
-    assert "purpose must be one of ['explore', 'profile']" in reply["error"]["message"]
+    assert "purpose must be one of ['explore', 'profile', 'probe']" in reply["error"]["message"]
     assert rig.toolbox.submitted == []
 
 
-@pytest.mark.parametrize("kind", ["repro", "sweep", "accuracy"])
+@pytest.mark.parametrize("kind", ["sweep", "accuracy"])
 def test_a_specialist_cannot_submit_a_kind_the_session_owns(rig: Rig, kind: str) -> None:
-    """A reproduction check takes no slot of the branch's K whatever its purpose; a sweep is the final selection's."""
+    """A sweep is the final selection's."""
     _, reply = rig.call(rig.token("s1"), "submit_test", kind=kind, purpose="explore", parent_commit="c1")
-    assert reply["error"]["code"] == -32602 and "kind must be one of ['test', 'profile']" in reply["error"]["message"]
+    assert reply["error"]["code"] == -32602
+    assert "kind must be one of ['test', 'profile', 'repro']" in reply["error"]["message"]
     assert rig.toolbox.submitted == []
 
 
-@pytest.mark.parametrize(("kind", "purpose"), [("test", "profile"), ("profile", "explore")])
+@pytest.mark.parametrize(
+    ("kind", "purpose"),
+    [("test", "profile"), ("profile", "explore"), ("repro", "explore"), ("test", "probe"), ("profile", "probe")],
+)
 def test_a_specialist_submits_kind_and_purpose_only_as_a_pair_it_owns(rig: Rig, kind: str, purpose: str) -> None:
     """A measured test sent as a profile would be queued at the profile's priority, ahead of every branch's explores,
-    skip the explore-only checks and escape the profile dedup, which is keyed on the kind."""
+    skip the explore-only checks and escape the profile dedup, which is keyed on the kind; one sent as a probe would
+    take no slot of the branch's K."""
     _, reply = rig.call(rig.token("s1"), "submit_test", kind=kind, purpose=purpose, parent_commit="c1")
     assert reply["error"]["code"] == -32602
     assert f"kind {kind} does not go with purpose {purpose}" in reply["error"]["message"]
-    assert "kind test with purpose explore and kind profile with purpose profile" in reply["error"]["message"]
+    assert (
+        "kind test with purpose explore and kind profile with purpose profile and kind repro with purpose probe"
+        in reply["error"]["message"]
+    )
+    assert rig.toolbox.submitted == []
+
+
+def test_a_specialist_never_submits_the_gates_repro(rig: Rig) -> None:
+    """A repro sent for the gate's purpose would be queued at the gate's priority and read as a regression verdict."""
+    _, reply = rig.call(rig.token("s1"), "submit_test", kind="repro", purpose="repro", parent_commit="c1")
+    assert reply["error"]["code"] == -32602 and "purpose must be one of" in reply["error"]["message"]
     assert rig.toolbox.submitted == []
 
 
@@ -273,6 +297,72 @@ def test_a_specialist_explores_and_profiles_at_the_priority_the_queue_gives(rig:
     rig.ok(token, "submit_test", kind="profile", purpose="profile", parent_commit="c1")
     submitted = [(r.kind.value, r.purpose.value, r.priority, r.retest_of) for r in rig.toolbox.submitted]
     assert submitted == [("test", "explore", None, None), ("profile", "profile", None, None)]
+
+
+@pytest.mark.parametrize(("needs_server", "entry"), [(False, "standalone.sh"), (True, "repro.sh")])
+def test_a_specialist_stores_a_script_with_probe_case_and_submits_it_as_a_probe(
+    rig: Rig, needs_server: bool, entry: str
+) -> None:
+    token = rig.token("s1")
+    case = json.loads(rig.ok(token, "probe_case", script="nvidia-smi || rocm-smi\n", needs_server=needs_server))
+    with tarfile.open(fileobj=io.BytesIO(rig.toolbox.attachments[case["sha256"]])) as archive:
+        assert archive.getnames() == [entry], "the entry script's name tells the runner whether to boot a server"
+        assert archive.extractfile(entry).read() == b"nvidia-smi || rocm-smi\n"  # type: ignore[union-attr]
+
+    rig.ok(token, "submit_test", kind="repro", purpose="probe", parent_commit="c1", attachments=[case])
+
+    (request,) = rig.toolbox.submitted
+    assert (request.kind, request.purpose, request.priority) == (TestKind.REPRO, Purpose.PROBE, None)
+    assert request.branch_id == "s1" and request.attachments == (AttachmentRef("probe-case", "dir", case["sha256"]),)
+
+
+def test_a_probe_without_its_case_is_refused(rig: Rig) -> None:
+    _, reply = rig.call(rig.token("s1"), "submit_test", kind="repro", purpose="probe", parent_commit="c1")
+    assert reply["error"]["code"] == -32602 and "needs its case as an attachment" in reply["error"]["message"]
+    assert rig.toolbox.submitted == []
+
+
+@pytest.fixture
+async def probed(seeded: tuple[Path, FakeClock], tmp_path: Path) -> Iterator[Rig]:
+    """A rig whose branch ``s1`` ran the probe ``pr1``: its case exited with 3 and left a log and a table."""
+    root, clock = seeded
+    toolbox = LocalBlackboard(root, Writer(Role.TOOLBOX, "toolbox"), clock=clock)
+    case = (AttachmentRef("probe-case", "dir", "b" * 64),)
+    probe = request("pr1", intent("s1", "c1"), kind=TestKind.REPRO, purpose=Purpose.PROBE, attachments=case)
+    await toolbox.write_request(probe)
+    landed = "tests/pr1/attempt-1"
+    await toolbox.write_result(dataclasses.replace(result("pr1"), case_exit_code=3, output_dir=landed))
+    left = tmp_path / "toolbox" / landed / "repro"
+    (left / "out").mkdir(parents=True)
+    (left / "case.log").write_text("x" * 20_000 + "THE-END\n")
+    (left / "out" / "table.csv").write_text("shape,us\n1x1,3\n")
+    (left / "out" / "weights.bin").write_text("w" * 9_000)
+    options = SpecialistToolOptions(claim_ttl_seconds=60.0, outputs_root=tmp_path / "toolbox")
+    for rig in _running(seeded, options):
+        yield rig
+
+
+@pytest.mark.parametrize("tool", ["test_result", "wait_test"])
+def test_a_probes_result_carries_its_exit_code_and_what_its_script_left_cut_to_one_reply(
+    probed: Rig, tool: str
+) -> None:
+    body = json.loads(probed.ok(probed.token("s1"), tool, request_id="pr1"))
+
+    assert body["result"]["case_exit_code"] == 3 and body["judgement"] is None
+    output = body["case_output"]
+    assert output["files"] == {"table.csv": "shape,us\n1x1,3\n"}
+    assert output["files_not_shown"] == ["weights.bin (9000 bytes)"]
+    assert output["log"].endswith("THE-END\n")
+    assert len(output["log"]) + len(output["files"]["table.csv"]) == mcp_tools.CASE_OUTPUT_CHARS
+
+
+def test_a_probes_output_is_its_own_branchs_to_read(probed: Rig) -> None:
+    _, reply = probed.call(probed.token("s2"), "test_result", request_id="pr1")
+    assert reply["error"]["code"] == -32001
+
+
+def test_a_test_that_ran_no_case_has_no_case_output(probed: Rig) -> None:
+    assert "case_output" not in json.loads(probed.ok(probed.token("s1"), "test_result", request_id="r1"))
 
 
 def test_toolbox_refusals_come_back_as_error_results_with_their_code(rig: Rig) -> None:

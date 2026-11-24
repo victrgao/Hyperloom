@@ -9,6 +9,7 @@ from hyperloom.contracts.measurement import Purpose, TestKind
 from hyperloom_multibranch.contracts.toolbox import Backpressure
 from hyperloom_multibranch.contracts.toolbox import RequestRejected
 from hyperloom_multibranch.toolbox.queue import (
+    PROBE_IN_FLIGHT,
     QueuedTest,
     QueuePolicy,
     State,
@@ -106,6 +107,48 @@ def test_the_global_limit_applies_to_exempt_tests_too() -> None:
 def test_repro_by_kind_or_purpose_is_exempt_and_explore_is_not() -> None:
     assert exempt_from_k(req(purpose=Purpose.REPRO, kind=TestKind.REPRO, attachments=_attachment()))
     assert not exempt_from_k(req())
+
+
+def _probe(branch: str = "b1"):
+    return req(branch, purpose=Purpose.PROBE, kind=TestKind.REPRO, attachments=_attachment())
+
+
+def test_a_probe_queues_with_the_profiles_behind_the_gates_repro_and_ahead_of_the_explores() -> None:
+    policy = QueuePolicy()
+    gate = req(purpose=Purpose.REPRO, kind=TestKind.REPRO, attachments=_attachment())
+    assert policy.priority_of(_probe()) == policy.priority_of(req(purpose=Purpose.PROFILE)) == 3
+    assert policy.priority_of(gate) < policy.priority_of(_probe()) < policy.priority_of(req())
+
+
+def test_a_probe_takes_no_slot_of_k_and_is_not_held_back_by_the_branchs_backlog() -> None:
+    queue = _queue(per_branch_k=1, max_queued_per_branch=1)
+    queue.push(_item("running"))
+    assert queue.take().request_id == "running"  # type: ignore[union-attr]
+    queue.push(_item("waiting"))
+    probe = _probe()
+    assert exempt_from_k(probe)
+    queue.check_backpressure(probe)
+    queue.push(QueuedTest(probe.accepted("probe"), queue.policy.priority_of(probe), 0))
+    assert queue.take().request_id == "probe", "the branch is at its K, and its probe still starts"  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("started", [False, True], ids=["queued", "running"])
+def test_a_branch_has_one_probe_in_flight_and_a_second_is_refused_with_the_first_named(started: bool) -> None:
+    queue = _queue()
+    queue.check_one_probe(_probe())
+    queue.push(QueuedTest(_probe().accepted("p1"), 3, 0))
+    if started:
+        assert queue.take().request_id == "p1"  # type: ignore[union-attr]
+
+    with pytest.raises(RequestRejected) as refused:
+        queue.check_one_probe(_probe())
+    assert (refused.value.code, refused.value.existing_request_id) == (PROBE_IN_FLIGHT, "p1")
+    queue.check_one_probe(_probe("b2"))
+    queue.check_one_probe(req())
+    queue.check_one_probe(req(purpose=Purpose.REPRO, kind=TestKind.REPRO, attachments=_attachment()))
+
+    queue.remove("p1")
+    queue.check_one_probe(_probe())
 
 
 def test_session_measurements_are_exempt_and_integration_and_profile_tests_are_not() -> None:

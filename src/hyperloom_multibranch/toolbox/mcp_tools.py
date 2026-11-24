@@ -9,6 +9,8 @@ from the arguments, so a specialist submits, cancels, claims, logs and reads its
 only; the blackboard's search and record reads are shared across branches, as the blackboard contract has them:
 
 * ``submit_test``, ``test_result``, ``cancel_test`` and ``queue_state`` go through the toolbox interface;
+* ``probe_case`` stores the script of a probe, the ``repro`` test a specialist submits for a diagnostic, and
+  ``test_result`` and ``wait_test`` return what the script left (:mod:`~.probe`);
 * ``wait_test`` blocks on one test of the branch until its record says it is over or the wait runs out, and then
   reports how far it has got (the toolbox's ``progress``);
 * ``start_analysis`` starts one of the analysis tools the toolbox serves (``tracelens``, ``roofline``, ``kernel_tune``:
@@ -38,6 +40,7 @@ import json
 import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from hyperloom.common.outside_facts import (
@@ -60,6 +63,7 @@ from hyperloom.hosted.mcp_server import (
     ToolForbidden,
 )
 from hyperloom.measure.compile import LOADABLE_KERNEL_KINDS
+from hyperloom.measure.repro import CASE_TIMEOUT_SEC, OUTPUT_MAX_BYTES, OUTPUT_MAX_FILES
 from hyperloom_multibranch.contracts.blackboard.interfaces import Blackboard, BlackboardError, StartupBriefProvider
 from hyperloom_multibranch.contracts.blackboard.records import InboxItem
 from hyperloom_multibranch.contracts.toolbox import (
@@ -73,6 +77,7 @@ from hyperloom_multibranch.contracts.toolbox import (
 )
 from hyperloom_multibranch.blackboard.tools import ERROR, blackboard_tools
 from hyperloom_multibranch.toolbox.analysis import CODE_NO_EXECUTOR, AnalysisStarter
+from hyperloom_multibranch.toolbox.probe import CASE_OUTPUT_CHARS, PROBE_CASE_ID, pack_probe, read_case_output
 from hyperloom_multibranch.toolbox.tools.kernel_tune import KERNEL_TUNE_TOOL
 from hyperloom_multibranch.toolbox.tools.roofline import ROOFLINE_TOOL, TRACELENS_TOOL
 from hyperloom_multibranch.toolbox.tools.upstream_pr import DEFAULT_LIMIT, MAX_LIMIT, UPSTREAM_PR_TOOL
@@ -130,14 +135,20 @@ _WAIT_TEST: dict[str, Any] = {
     "required": ["request_id"],
     "additionalProperties": False,
 }
-#: What a specialist tests, as ``(kind, purpose)`` pairs: a change of its own (``test`` for ``explore``) or the profile
-#: of its head (``profile`` for ``profile``). The other purposes and kinds are the session's (a baseline, a health check,
+#: What a specialist tests, as ``(kind, purpose)`` pairs: a change of its own (``test`` for ``explore``), the profile
+#: of its head (``profile`` for ``profile``) or a script of its own that measures nothing (``repro`` for ``probe``). The
+#: other purposes and kinds are the session's (a baseline, a health check,
 #: a final candidate, an integration, the confirm retest of a measured gain, a regression's reproduction, a final
 #: sweep): the queue exempts most of them from the branch's K and its backpressure, so a specialist that could send them
 #: would take the session's capacity. Kind and purpose are checked as one pair: a measured test sent as a profile would
 #: be queued at the profile's priority, ahead of every branch's explores, skip the explore-only checks and escape the
-#: profile dedup, which is keyed on the kind.
-SPECIALIST_PAIRS = ((TestKind.TEST, Purpose.EXPLORE), (TestKind.PROFILE, Purpose.PROFILE))
+#: profile dedup, which is keyed on the kind; a ``repro`` sent for ``repro`` would be queued at the gate's priority and
+#: read as a regression verdict. A probe is exempt from K, and held to one per branch by the queue instead.
+SPECIALIST_PAIRS = (
+    (TestKind.TEST, Purpose.EXPLORE),
+    (TestKind.PROFILE, Purpose.PROFILE),
+    (TestKind.REPRO, Purpose.PROBE),
+)
 SPECIALIST_KINDS = tuple(kind for kind, _ in SPECIALIST_PAIRS)
 SPECIALIST_PURPOSES = tuple(purpose for _, purpose in SPECIALIST_PAIRS)
 _SPECIALIST_PAIR_VALUES = frozenset((kind.value, purpose.value) for kind, purpose in SPECIALIST_PAIRS)
@@ -155,7 +166,8 @@ _SUBMIT_TEST: dict[str, Any] = {
             "enum": [purpose.value for purpose in SPECIALIST_PURPOSES],
             "description": (
                 "explore (with kind test) for a change of yours, profile (with kind profile) for the profile of your "
-                "head; any other pair is refused. The runtime retests a measured gain itself (confirm) and the session "
+                "head, probe (with kind repro) for a script of yours, stored with probe_case; any other pair is "
+                "refused. The runtime retests a measured gain itself (confirm) and the session "
                 "runs its own baselines, finals and integrations."
             ),
         },
@@ -177,6 +189,32 @@ _SUBMIT_TEST: dict[str, Any] = {
     "required": ["kind", "purpose", "parent_commit"],
     "additionalProperties": False,
 }
+_PROBE_CASE: dict[str, Any] = {
+    "type": _OBJECT,
+    "properties": {
+        "script": {
+            "type": _STRING,
+            "minLength": 1,
+            "description": (
+                "A bash script. It runs in the test's sandbox with what the test's server is launched with: the same "
+                "environment (the test's cards, your patch first on the import path, the delta's envs), $HL_PYTHON "
+                "(the server's interpreter) and $HL_MODEL. Its output and exit code come back, and so do up to "
+                f"{OUTPUT_MAX_FILES} small files it writes at the top of $HL_OUTPUT_DIR ({OUTPUT_MAX_BYTES} bytes in "
+                "all)."
+            ),
+        },
+        "needs_server": {
+            "type": _BOOLEAN,
+            "description": (
+                "true: the test boots its server first and the script runs against it at $HL_BASE_URL, with the "
+                "server's live log at $HL_SERVER_LOG. false: no server is started and the script has the cards to "
+                "itself."
+            ),
+        },
+    },
+    "required": ["script", "needs_server"],
+    "additionalProperties": False,
+}
 _ANALYSIS_BLURBS = {
     TRACELENS_TOOL: "analyse a trace",
     ROOFLINE_TOOL: "the kernel roofline of a trace",
@@ -184,7 +222,10 @@ _ANALYSIS_BLURBS = {
     UPSTREAM_PR_TOOL: "search upstream pull requests",
 }
 _TEST_RESULT_GUIDE = (
-    "The state and result of one test this branch submitted, or of any branch's profile test. An AgentX test's "
+    "The state and result of one test this branch submitted, or of any branch's profile test. A probe's result has "
+    "case_exit_code, your script's exit code (negative: the signal that ended it, -9 at its time limit), and "
+    "case_output: log, the end of what the script printed, files, what it wrote to $HL_OUTPUT_DIR, and "
+    f"files_not_shown ({CASE_OUTPUT_CHARS} characters in all, so print what you need last). An AgentX test's "
     "request_classes has an entry for each measured round: how many requests the client marked failed, as "
     "failed_transport (the server did not serve it) and failed_no_content (it answered and the client found nothing in "
     "the answer; failed_empty and failed_short split these by output tokens when the export says, else null with the "
@@ -501,13 +542,14 @@ def _start_analysis(
     return handle
 
 
-def _result_document(request_id: str, record: Any) -> dict[str, Any]:
-    """What ``test_result`` answers for the blackboard's ``record`` of ``request_id``."""
+def _result_document(request_id: str, record: Any, outputs_root: Path | None) -> dict[str, Any]:
+    """What ``test_result`` answers for the blackboard's ``record`` of ``request_id``; a repro test whose case ran
+    also has what the case left, read from where its output landed below ``outputs_root``."""
     if record.withdrawn_at is not None:
         state = "withdrawn"
     else:
         state = "in_flight" if record.result is None else "measured"
-    return {
+    document = {
         "request_id": request_id,
         "state": state,
         "withdrawal_reason": record.withdrawal_reason,
@@ -515,12 +557,17 @@ def _result_document(request_id: str, record: Any) -> dict[str, Any]:
         "judgement": jsonable(record.judgement),
         "conclusion": jsonable(record.conclusion),
     }
+    result = record.result
+    if outputs_root is not None and result is not None and result.case_exit_code is not None:
+        document["case_output"] = read_case_output(outputs_root / result.output_dir)
+    return document
 
 
-def _test_result(blackboards: BlackboardFor) -> Callable[[dict[str, Any], CallContext], Any]:
+def _test_result(blackboards: BlackboardFor, outputs_root: Path | None) -> Callable[[dict[str, Any], CallContext], Any]:
     async def handle(arguments: dict[str, Any], ctx: CallContext) -> dict[str, Any]:
         request_id = arguments["request_id"]
-        return _result_document(request_id, await _own_record(blackboards, ctx, request_id, profiles_shared=True))
+        record = await _own_record(blackboards, ctx, request_id, profiles_shared=True)
+        return await asyncio.to_thread(_result_document, request_id, record, outputs_root)
 
     return handle
 
@@ -562,17 +609,17 @@ def _waiting_document(request_id: str, waited: float, progress: TestProgress | N
 
 
 def _wait_test(
-    toolbox: Toolbox, blackboards: BlackboardFor, home: asyncio.AbstractEventLoop | None, poll_seconds: float
+    toolbox: Toolbox, blackboards: BlackboardFor, home: asyncio.AbstractEventLoop | None, options: SpecialistToolOptions
 ) -> Callable[[dict[str, Any], CallContext], Any]:
     async def handle(arguments: dict[str, Any], ctx: CallContext) -> dict[str, Any]:
         request_id = arguments["request_id"]
         budget, started = wait_budget(arguments.get("wait_seconds")), time.monotonic()
         record = await _own_record(blackboards, ctx, request_id, profiles_shared=True)
         while not _is_over(record) and (left := budget - (time.monotonic() - started)) > 0:
-            await asyncio.sleep(min(poll_seconds, left))
+            await asyncio.sleep(min(options.wait_poll_seconds, left))
             record = await _own_record(blackboards, ctx, request_id, profiles_shared=True)
         if _is_over(record):
-            return _result_document(request_id, record)
+            return await asyncio.to_thread(_result_document, request_id, record, options.outputs_root)
         progress = await on_home_loop(home, toolbox.progress(request_id))
         return _waiting_document(request_id, time.monotonic() - started, progress)
 
@@ -765,6 +812,8 @@ class SpecialistToolOptions:
     with the caller's branch from the token at every ``blackboard_brief``; without it the blackboard's own brief is returned.
     ``analysis`` starts ``start_analysis`` jobs (the real toolbox is one); without it that tool refuses by name.
     ``wait_poll_seconds`` is how often ``wait_test`` reads the record of the test it waits for.
+    ``outputs_root`` is the directory a result's ``output_dir`` is relative to (the toolbox's session directory);
+    without it a probe's result comes back without what its script left.
     """
 
     claim_ttl_seconds: float = 600.0
@@ -773,6 +822,7 @@ class SpecialistToolOptions:
     briefing_for: BriefingFor | None = None
     analysis: AnalysisStarter | None = None
     wait_poll_seconds: float = WAIT_POLL_SECONDS
+    outputs_root: Path | None = None
 
 
 def register_specialist_tools(
@@ -789,6 +839,7 @@ def register_specialist_tools(
             toolbox_loop = asyncio.get_running_loop()
     server.attach_reply_annotator(reply_inbox(blackboards))
     _register_submit_test(server, toolbox, toolbox_loop)
+    _register_probe_case(server, toolbox, toolbox_loop)
     _register_put_kernel_artifact(server, toolbox, toolbox_loop)
     _register_test_queries(server, toolbox, blackboards, toolbox_loop, options)
     _register_start_analysis(server, options.analysis, toolbox_loop)
@@ -802,10 +853,42 @@ def _register_submit_test(server: McpServer, toolbox: Toolbox, home: asyncio.Abs
         description=(
             "Submit a test of a recipe change for this branch; returns the request id once accepted. A profile of a "
             "commit that already has one queued, running or measured is refused as profile_exists and names that "
-            "request: wait_test on it, or read the commit's op shares from the blackboard."
+            "request: wait_test on it, or read the commit's op shares from the blackboard. A probe (kind repro, "
+            "purpose probe, the attachment of probe_case in attachments) runs your script on parent_commit with the "
+            "delta applied and measures nothing: it takes no slot of your K, is never judged, and a branch has one "
+            "queued or running at a time (a second is refused as probe_in_flight and names the first)."
         ),
         schema=_SUBMIT_TEST,
         handler=_submit_test(toolbox, home),
+        scopes=_SPECIALIST_SCOPES,
+    )
+
+
+def _probe_case(
+    toolbox: Toolbox, home: asyncio.AbstractEventLoop | None
+) -> Callable[[dict[str, Any], CallContext], Any]:
+    async def handle(arguments: dict[str, Any], _ctx: CallContext) -> dict[str, object]:
+        data = pack_probe(arguments["script"], needs_server=arguments["needs_server"])
+        try:
+            ref = await on_home_loop(home, toolbox.put_attachment(PROBE_CASE_ID, "dir", data))
+        except RequestRejected as exc:
+            raise ToolError(f"rejected ({exc.code}): {exc.reason}") from exc
+        return ref.to_document()
+
+    return handle
+
+
+def _register_probe_case(server: McpServer, toolbox: Toolbox, home: asyncio.AbstractEventLoop | None) -> None:
+    server.register(
+        "probe_case",
+        description=(
+            "Store the script of a probe, a short run on a test's cards that measures nothing: a kernel timed alone, a "
+            "check that a patch imports and takes the path you expect, a question to the server your change serves. "
+            "Returns the attachment to pass in the attachments of submit_test with kind repro and purpose probe. The "
+            f"script may run {int(CASE_TIMEOUT_SEC)} s; its numbers never enter the gate."
+        ),
+        schema=_PROBE_CASE,
+        handler=_probe_case(toolbox, home),
         scopes=_SPECIALIST_SCOPES,
     )
 
@@ -822,7 +905,7 @@ def _register_test_queries(
         "test_result",
         description=_TEST_RESULT_GUIDE,
         schema=_REQUEST_ID,
-        handler=_test_result(blackboards),
+        handler=_test_result(blackboards, options.outputs_root),
         scopes=_SPECIALIST_SCOPES,
     )
     server.register(
@@ -834,7 +917,7 @@ def _register_test_queries(
             "eta_seconds), not stuck."
         ),
         schema=_WAIT_TEST,
-        handler=_wait_test(toolbox, blackboards, home, options.wait_poll_seconds),
+        handler=_wait_test(toolbox, blackboards, home, options),
         scopes=_SPECIALIST_SCOPES,
     )
     server.register(

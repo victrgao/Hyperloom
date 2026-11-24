@@ -503,6 +503,7 @@ def _serve_specialist_tools(
         learnings=briefs.learnings,
         briefing_for=briefs.for_branch,
         analysis=toolbox,
+        outputs_root=toolbox.trace_root,
     )
     register_specialist_tools(mcp, toolbox=toolbox, blackboards=blackboards, options=options)
 

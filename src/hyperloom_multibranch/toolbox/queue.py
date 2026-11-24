@@ -5,7 +5,9 @@
 
 The queue is plain in-memory state with no I/O, so the fake executor and the real one share it. Confirm-retests,
 reproduction checks and session measurements do not count against their branch's K (otherwise K exploration tests
-would starve the retest that decides them), but they do count against the global limit.
+would starve the retest that decides them), but they do count against the global limit. A specialist's probe does not
+count against K either, so a short diagnostic never waits for the branch's long tests to end; a branch has one probe
+waiting or running at a time instead.
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ from hyperloom.contracts.measurement import (
 from hyperloom_multibranch.contracts.toolbox import Backpressure, QueueState, RequestRejected
 
 _LOWEST_PRIORITY = 4
+#: Ahead of the explores and behind everything the session or the gate asks for: a profile, an accuracy pass, a probe.
+_PROFILE_PRIORITY = 3
 
 #: Priority of a request that names none, by purpose. Baseline, health and final are the scheduler's to
 #: give through QueuePolicy.priority_override; until it does they take the fallbacks below.
@@ -31,8 +35,9 @@ DEFAULT_PRIORITY: Mapping[Purpose, int] = {
     Purpose.CONFIRM: 0,
     Purpose.REPRO: 1,
     Purpose.INTEGRATION: 2,
-    Purpose.PROFILE: 3,
-    Purpose.ACCURACY: 3,
+    Purpose.PROFILE: _PROFILE_PRIORITY,
+    Purpose.PROBE: _PROFILE_PRIORITY,
+    Purpose.ACCURACY: _PROFILE_PRIORITY,
     Purpose.EXPLORE: _LOWEST_PRIORITY,
     Purpose.BASELINE: 2,
     Purpose.FINAL: 2,
@@ -43,6 +48,7 @@ DEFAULT_QUEUE_FACTOR = 4
 DEFAULT_K = 2
 DEFAULT_K_KEY = "*"
 BRANCH_STOPPED = "branch_stopped"
+PROBE_IN_FLIGHT = "probe_in_flight"
 
 
 @dataclass(frozen=True)
@@ -205,6 +211,20 @@ class WorkQueue:
             return
         if self.policy.listed_branches_only and request.branch_id not in self.policy.branch_k:
             raise RequestRejected(f"branch {request.branch_id!r} has no quota", code=BRANCH_STOPPED)
+
+    def check_one_probe(self, request: TestRequest) -> None:
+        """Refuse a probe of a branch that has one waiting or running, and name that one."""
+
+        if request.purpose is not Purpose.PROBE:
+            return
+        for item in self._items.values():
+            if item.branch == request.branch_id and item.request.purpose is Purpose.PROBE:
+                raise RequestRejected(
+                    f"branch {request.branch_id!r} already has a probe, request {item.request_id}, queued or running; "
+                    "wait_test on it first",
+                    PROBE_IN_FLIGHT,
+                    existing_request_id=item.request_id,
+                )
 
     def check_backpressure(self, request: TestRequest) -> None:
         if exempt_from_k(request):

@@ -82,7 +82,7 @@ async def test_the_blackboard_keeps_the_phases_and_test_result_shows_them(tmp_pa
 
     record = await tb.blackboard.record(request_id)
     assert record.result is not None and record.result.phases == result.phases
-    shown = _result_document(request_id, record)["result"]
+    shown = _result_document(request_id, record, None)["result"]
     assert [p["name"] for p in shown["phases"]] == _names(result)
     assert shown["unaccounted_seconds"] == result.unaccounted_seconds
     assert shown["phases"][3] == {**shown["phases"][3], "name": "server_boot", "seconds": 0.4, "gpu_seconds": 0.4}

@@ -39,7 +39,8 @@ class RequestRejected(ToolboxError):
 
     ``code`` is a short stable name of the refused check, for a caller that reacts to one of them
     (:data:`REJECTION_CODES`); ``reason`` is the text for a person or a log. ``existing_request_id`` is set by the
-    refusals that point at a request already accepted (``profile_exists``): the one the caller waits for instead.
+    refusals that point at a request already accepted (``profile_exists``, ``probe_in_flight``): the one the caller waits
+    for instead.
     """
 
     def __init__(self, reason: str, code: str = "invalid_request", *, existing_request_id: str | None = None) -> None:
@@ -89,6 +90,7 @@ REJECTION_CODES = (
     "speculative_decoding_pinned",  # a candidate simulates the acceptance of a draft its parent verifies, or an AgentX one changes the draft or simulated acceptance its parent pins
     "unsupported_kind",  # the toolbox's backend does not run this kind of test (a local backend: profile, repro), or has no cards to lease
     "profile_exists",  # a PROFILE of this commit and recipe is already queued, running or measured: ``existing_request_id``
+    "probe_in_flight",  # the branch already has a probe queued or running: ``existing_request_id``
     "empty_delta",  # an explore test whose delta changes nothing
     "no_effective_change",  # an explore test whose candidate recipe equals its parent's: the delta restates the parent
     "upstream_label_unsupported",  # a delta moves the upstream_ref or upstream_repo of a component the parent has

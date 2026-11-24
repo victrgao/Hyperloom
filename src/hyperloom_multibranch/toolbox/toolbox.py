@@ -250,6 +250,7 @@ class RealToolbox:
             request = self._acceptance.with_required_accuracy(request)
             prepared = await self._acceptance.prepare(request)
             self._queue.check_branch_listed(request)
+            self._queue.check_one_probe(request)
             self._queue.check_backpressure(request)
             needs = self._builds.plan(request, prepared.environment)
             if needs:

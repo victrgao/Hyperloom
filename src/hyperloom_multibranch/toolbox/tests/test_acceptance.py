@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,16 @@ from hyperloom.contracts.recipe import (
 )
 from hyperloom_multibranch.contracts.toolbox import REJECTION_CODES, RequestRejected, WorkloadKind
 from hyperloom_multibranch.toolbox.acceptance import Acceptance, AcceptanceSetup
-from hyperloom_multibranch.toolbox.tests.helpers import BAD_DELTA, IMAGE, OTHER_IMAGE, FakePlanner, FakeRepo, build, req
+from hyperloom_multibranch.toolbox.tests.helpers import (
+    BAD_DELTA,
+    IMAGE,
+    OTHER_IMAGE,
+    FakePlanner,
+    FakeRepo,
+    ScriptedExecutor,
+    build,
+    req,
+)
 
 
 async def _rejected(rig, request, code: str) -> None:
@@ -132,6 +142,25 @@ async def test_a_repro_test_is_accepted_without_accuracy_whatever_the_workload(t
     await rig.toolbox.drain()
     ran = next(j for j in rig.executor.jobs if j.request.request_id == request_id)
     assert ran.request.kind is TestKind.REPRO and ran.request.accuracy is False and ran.request.attachments == (case,)
+
+
+async def test_a_probe_with_an_empty_delta_is_accepted_and_a_second_waits_for_the_first(tmp_path: Path) -> None:
+    executor = ScriptedExecutor(gate=asyncio.Event())
+    rig = build(tmp_path, executor=executor)
+    case = (AttachmentRef("probe-case", "dir", "a" * 64),)
+    probe = req(kind=TestKind.REPRO, purpose=Purpose.PROBE, attachments=case, change=RecipeDelta())
+
+    request_id = await rig.toolbox.submit_test(probe)
+    with pytest.raises(RequestRejected) as refused:
+        await rig.toolbox.submit_test(probe)
+    assert (refused.value.code, refused.value.existing_request_id) == ("probe_in_flight", request_id)
+
+    executor.gate.set()
+    await rig.toolbox.drain()
+    (ran,) = executor.jobs
+    assert ran.request.accuracy is False and ran.priority == 3
+    await rig.toolbox.submit_test(probe)  # the first has ended: the branch may probe again
+    await rig.toolbox.drain()
 
 
 # --- an InferenceX campaign runs the purposes the rule gate reads with accuracy ---------------------------------------

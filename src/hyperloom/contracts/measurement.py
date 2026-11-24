@@ -120,7 +120,11 @@ class TestKind(str, Enum):
 
 
 class Purpose(str, Enum):
-    """Why a test is run; the toolbox takes its default priority from it."""
+    """Why a test is run; the toolbox takes its default priority from it.
+
+    A ``REPRO`` test is asked for in two ways: ``REPRO``, the rule gate's, whose exit code the gate reads as a
+    regression verdict, and ``PROBE``, a specialist's diagnostic, whose exit code is the specialist's alone to read.
+    """
 
     BASELINE = "baseline"
     HEALTH = "health"
@@ -130,6 +134,7 @@ class Purpose(str, Enum):
     PROFILE = "profile"
     ACCURACY = _ACCURACY
     REPRO = "repro"
+    PROBE = "probe"
     FINAL = "final"
 
 

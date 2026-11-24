@@ -38,6 +38,7 @@ from hyperloom_multibranch.toolbox.local_hosted import (
     LocalSession,
     build_local_toolbox,
 )
+from hyperloom_multibranch.toolbox.probe import PROBE_CASE_ID, pack_probe, read_case_output
 from hyperloom_multibranch.toolbox.queue import QueuePolicy
 from hyperloom_multibranch.toolbox.tests.helpers import IMAGE, FakeRepo, freeze_base_at, req
 from hyperloom_multibranch.toolbox.tests.test_hosted_executor import PointPlanner
@@ -121,6 +122,27 @@ async def test_a_repro_test_runs_its_attached_case_against_the_server_and_report
         landed = rig.session / result.output_dir / "repro"
         assert (landed / "case.log").read_text() == f"case saw {_BASE_URL} /nonexistent/model\n"
         assert json.loads((landed / "verdict.json").read_text()) == {"exit_code": code}
+        await rig.toolbox._executor.reverify(result)  # type: ignore[attr-defined]
+    finally:
+        await rig.toolbox.close()
+
+
+async def test_a_probe_that_needs_no_server_runs_on_the_cards_alone_and_its_output_comes_back(
+    tmp_path: Path, checkout: tuple[Path, str]
+) -> None:
+    rig = await _rig(tmp_path, checkout, FAKE_BOOT="fail")  # a boot would fail the test: none is attempted
+    script = 'echo "server ${HL_BASE_URL:-none}"\necho "shape,us" > "$HL_OUTPUT_DIR/table.csv"\nexit 3\n'
+    try:
+        case = await rig.toolbox.put_attachment(PROBE_CASE_ID, "dir", pack_probe(script, needs_server=False))
+        result = await rig.result_of(req(kind=TestKind.REPRO, purpose=Purpose.PROBE, attachments=(case,)))
+
+        assert result.validity is Validity.SUCCEEDED and result.case_exit_code == 3, result
+        assert result.rounds == () and result.manifest_sha256 and result.gpu_seconds > 0
+        assert read_case_output(rig.session / result.output_dir) == {
+            "log": "server none\n",
+            "files": {"table.csv": "shape,us\n"},
+            "files_not_shown": [],
+        }
         await rig.toolbox._executor.reverify(result)  # type: ignore[attr-defined]
     finally:
         await rig.toolbox.close()

@@ -22,8 +22,8 @@ attempts into the request's single result:
 * ``candidate`` failure (a known failure signature): ``candidate_failed`` at once.
 * ``unclear`` failure: one rerun away from the first node. A second failure is ``candidate_failed``; a success is the
   result, and the first attempt is re-labelled an infrastructure failure of its node and reported as a failure that
-  did not reproduce. A sweep that ran out of its time (:data:`TEST_TIMEOUT_REASON`) is not rerun: ``measurement_failed``
-  at once (:func:`_outran`).
+  did not reproduce. A sweep that ran out of its time (:data:`TEST_TIMEOUT_REASON`) and a specialist's probe are not
+  rerun: ``measurement_failed`` at once (:func:`_not_rerun`).
 * an executor that raises :class:`MeasurementRefused` (a rejected spec, a result that fails verification): no retry,
   ``measurement_failed``.
 
@@ -58,6 +58,7 @@ from hyperloom.measure.runner.import_outcome import INERT_PATCH
 from hyperloom.contracts.measurement import (
     Attempt,
     FailureClass,
+    Purpose,
     TestKind,
     TestRequest,
     TestResult,
@@ -149,7 +150,7 @@ _UNREPORTED_INFRA_REASONS = ONCE_RETRIED_INFRA_REASONS | NODE_BLAMELESS_INFRA_RE
 WAITED_INFRA_REASONS: frozenset[str] = NODE_BLAMELESS_INFRA_REASONS | frozenset(
     {FOREIGN_PROCESS_ON_CARD, RUNNER_START_TIMEOUT, CAPACITY_UNAVAILABLE}
 )
-#: The kinds whose result holds no measured round: a profile names its traces, a repro its verdict.
+#: The kinds whose result holds no measured round: a profile names its traces, a repro its case's exit code.
 UNMEASURED_KINDS = (TestKind.PROFILE, TestKind.REPRO)
 
 
@@ -248,12 +249,18 @@ def _retry_refused(reason: str | None, attempts: list[Attempt]) -> bool:
     return name in ONCE_RETRIED_INFRA_REASONS and sum(_reason_name(a.failure_reason) == name for a in attempts) > 1
 
 
-def _outran(request: TestRequest, reason: str | None) -> bool:
-    """Whether an unclear failure is a sweep that ran out of its time. Its rerun gets the same time for the same concs,
-    which a sweep at a low conc outruns again; FINAL, the sweep's one requester, ranks a candidate whose sweep gave
-    nothing on its reproduction (``hyperloom_multibranch.scheduling.final``), so a rerun only holds FINAL for one more
-    timeout. The sweep ends ``measurement_failed``, nothing held against the candidate or the node."""
-    return request.kind is TestKind.SWEEP and _reason_name(reason) == TEST_TIMEOUT_REASON
+def _not_rerun(request: TestRequest, reason: str | None) -> bool:
+    """Whether an unclear failure ends its test ``measurement_failed`` with no rerun, nothing held against the
+    candidate or the node.
+
+    A sweep that ran out of its time: its rerun gets the same time for the same concs, which a sweep at a low conc
+    outruns again; FINAL, the sweep's one requester, ranks a candidate whose sweep gave nothing on its reproduction
+    (``hyperloom_multibranch.scheduling.final``), so a rerun only holds FINAL for one more timeout. A probe: it judges
+    no candidate, so a rerun settles nothing; the specialist reads the failure and decides whether to ask again.
+    """
+    return request.purpose is Purpose.PROBE or (
+        request.kind is TestKind.SWEEP and _reason_name(reason) == TEST_TIMEOUT_REASON
+    )
 
 
 def _attempt_of(result: TestResult) -> Attempt:
@@ -335,7 +342,7 @@ class AttemptRunner:
                     job, result, attempts, _Ending(Validity.CANDIDATE_FAILED, failure, result.failure_reason)
                 )
             if failure is FailureClass.UNCLEAR:
-                if reran or _outran(job.request, result.failure_reason):
+                if reran or _not_rerun(job.request, result.failure_reason):
                     validity = Validity.CANDIDATE_FAILED if reran else Validity.MEASUREMENT_FAILED
                     return self._final(job, result, attempts, _Ending(validity, failure, result.failure_reason))
                 reran = True

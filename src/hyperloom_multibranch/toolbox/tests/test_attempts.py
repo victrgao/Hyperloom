@@ -10,6 +10,7 @@ from dataclasses import replace
 import pytest
 
 from hyperloom.contracts.measurement import (
+    AttachmentRef,
     FailureClass,
     Purpose,
     SandboxFacts,
@@ -343,6 +344,27 @@ async def test_a_sweep_that_ran_out_of_time_is_not_rerun(kind, runs, validity) -
     assert len(executor.jobs) == runs and len(result.attempts) == runs
     assert time.waits == [], "an unclear rerun does not wait"
     assert result.validity is validity and result.failure_class is FailureClass.UNCLEAR
+
+
+@pytest.mark.parametrize(
+    "purpose, runs, validity",
+    [(Purpose.PROBE, 1, Validity.MEASUREMENT_FAILED), (Purpose.REPRO, 2, Validity.CANDIDATE_FAILED)],
+    ids=["probe", "gate"],
+)
+async def test_a_probe_that_failed_unclear_is_not_rerun_and_the_gates_repro_still_is(purpose, runs, validity) -> None:
+    executor = _TimedOutExecutor(TEST_TIMEOUT_REASON)
+    reported: list[str] = []
+
+    async def on_node_failure(node: str, _reason: str, _reproduced: bool) -> None:
+        reported.append(node)
+
+    job = _job()
+    case = (AttachmentRef("case", "dir", "a" * 64),)
+    job = replace(job, request=replace(job.request, kind=TestKind.REPRO, purpose=purpose, attachments=case))
+    result = await AttemptRunner(executor, avoid=frozenset, on_node_failure=on_node_failure).run(job)
+
+    assert len(executor.jobs) == runs and result.validity is validity
+    assert result.failure_class is FailureClass.UNCLEAR and reported == []
     assert result.failure_reason == TEST_TIMEOUT_REASON
     assert reported == [], "a timeout is held against neither node"
 
