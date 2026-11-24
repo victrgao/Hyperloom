@@ -1858,7 +1858,9 @@ def test_a_repro_test_boots_the_server_runs_the_case_against_it_and_its_exit_cod
     grid, monkeypatch, tmp_path, code
 ):
     _boot_only(grid)
-    case = _Case(tmp_path, monkeypatch, f'echo "$HL_BASE_URL $HL_MODEL" > {tmp_path}/case-ran\nexit {code}')
+    case = _Case(
+        tmp_path, monkeypatch, f'echo "$HL_BASE_URL $HL_MODEL $HL_SERVER_LOG" > {tmp_path}/case-ran\nexit {code}'
+    )
 
     outcome = _run(_repro_call(tmp_path))
 
@@ -1867,7 +1869,8 @@ def test_a_repro_test_boots_the_server_runs_the_case_against_it_and_its_exit_cod
     assert kwargs["launch"].lifecycle_boot_only is True and kwargs["launch"].warmup_before_measure is False
     assert kwargs["recipe"].base.extra_envs == BOOT_ENVS, "the repro boot is not an evaluation"
     assert kwargs["launch"].server_lifecycle["cleanup"] is False and kwargs["launch"].server_lifecycle["port"] == 8123
-    assert (tmp_path / "case-ran").read_text() == "http://127.0.0.1:8123 /models/m\n"
+    live_log = tmp_path / "out" / "server_arm" / "server.log"
+    assert (tmp_path / "case-ran").read_text() == f"http://127.0.0.1:8123 /models/m {live_log}\n"
     assert case.events == ["teardown after the case"], "the server stays up for the case and is reclaimed after it"
     assert read_exit_code(tmp_path / "out") == code
     assert (outcome.returncode, outcome.failure_class, outcome.rounds) == (0, None, ()), (

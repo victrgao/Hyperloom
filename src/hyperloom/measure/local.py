@@ -37,6 +37,7 @@ from typing import Any
 
 import yaml
 from inference_suite.contracts import FailedStep
+from inference_suite.contracts.layout import SERVER_LOG
 
 from hyperloom.common.benchmark_config import BenchmarkPoint, BenchmarkPointError, read_benchmark_point
 from hyperloom_common.env import is_truthy
@@ -884,6 +885,7 @@ async def _repro(run: Run) -> None:
         if not is_failure(boot) and run.stopped_rc is None:
             server = {
                 "HL_BASE_URL": f"http://127.0.0.1:{lifecycle.port}",
+                "HL_SERVER_LOG": str(lifecycle.pid_dir / SERVER_LOG),
                 "no_proxy": _LOCAL_HOSTS,
                 "NO_PROXY": _LOCAL_HOSTS,
             }

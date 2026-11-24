@@ -6,8 +6,9 @@
 A case is an attachment directory with one entry script at its top, run with ``bash`` and that directory as its working
 directory. The script's name says what the case needs: ``repro.sh`` runs against a server the test boots for it,
 ``standalone.sh`` runs with no server, on the test's cards alone. The runner unpacks every attachment under
-``attach/<id>/``. Whoever runs the case gives it its environment; this module adds ``HL_OUTPUT_DIR``, a directory the
-case may leave a few small files in.
+``attach/<id>/``. Whoever runs the case gives it its environment (``hyperloom.measure.local``: what the test's server
+is launched with, ``HL_PYTHON`` and ``HL_MODEL``, and for a booted server ``HL_BASE_URL`` and ``HL_SERVER_LOG``, its
+live log); this module adds ``HL_OUTPUT_DIR``, a directory the case may leave a few small files in.
 
 The exit code is the case's result and is recorded as it is: this module reads no meaning into it, the requester does.
 A negative code is the signal that ended the case, ``-9`` for one killed at its time limit. What comes back, below
