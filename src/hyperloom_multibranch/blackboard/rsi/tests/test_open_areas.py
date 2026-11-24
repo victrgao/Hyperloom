@@ -191,7 +191,7 @@ def test_an_op_whose_focused_branches_on_the_head_ended_without_a_commit_is_spen
 
 
 CRASHED = "gave_up: its specialist gave up after 4 crashes"
-QUIET = "gave_up: its specialist gave up: its sessions in a row found nothing to test"
+QUIET = "gave_up: its specialist gave up: its session found nothing to test"
 #: The stop of a specialist that crashed once, was restarted and then found nothing to test twice: the writer states
 #: the idle give-up, whatever crashes came before it, so it reads as the quiet one.
 CRASHED_THEN_IDLE = QUIET
@@ -339,7 +339,7 @@ def test_a_done_record_of_one_direction_spends_nothing_when_the_branch_stopped_w
         "judge: stalled 6 tests since it opened",
         "session_end: time_exhausted",
         "gave_up: its specialist gave up after 3 crashes",
-        "gave_up: its specialist gave up: its sessions in a row found nothing to test",
+        "gave_up: its specialist gave up: its session found nothing to test",
     ):
         stopped = _stopped(exhausted, "b9", reason)
         found = open_areas(stopped, seconds_left=4 * HOUR, first_commit_minutes=42.0)

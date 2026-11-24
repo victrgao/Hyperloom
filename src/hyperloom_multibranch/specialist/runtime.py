@@ -20,9 +20,7 @@ session working in between: a loss takes the heartbeat timeout, so losses alone 
 the session waited on its branch's long dev-sandbox process counts toward neither: a model waiting on it is silent,
 not hung, and giving it up would end that process. Whether the
 restart resumes the crashed conversation is the session's to decide; the notice only says which. A session that
-ends idle, its model finding nothing to test, is no crash: the branch gets one more session, which goes on with the
-idle conversation or starts fresh as the session decides, and ``MAX_IDLE_SESSIONS`` idle sessions in a row end it, a
-session that submitted a test starting the count again. Then
+ends idle, its model finding nothing to test however often it was nudged, is no crash and is not restarted:
 the specialist gives up and the scheduler stops the branch, freeing its slot for a fresh branch with its own direction.
 A session that finished, a third-party agent that ended its run and whose last keep settled, ends its specialist the
 same way. Past any of these the branch keeps its judge, which settles what was already measured, and the scheduler stops
@@ -61,7 +59,6 @@ MAX_RESTARTS = 3
 SLOW_STOP_SECONDS = 30.0
 RESTART_WINDOW_S = 600.0
 MAX_LOSS_RESTARTS = 2
-MAX_IDLE_SESSIONS = 2
 
 
 class RuntimeBlackboard(JudgeBlackboard, ClaimService, Protocol):
@@ -90,12 +87,7 @@ class SessionCrashed(RuntimeError):
 
 
 class SessionIdle(RuntimeError):
-    """A run of a branch's specialist ended because its model kept finding nothing to test; ``tested`` says whether
-    the run submitted a test before it did, ``resumable`` whether the next run goes on with its conversation."""
-
-    def __init__(self, message: str, *, tested: bool = False, resumable: bool = False) -> None:
-        super().__init__(message)
-        self.tested, self.resumable = tested, resumable
+    """A run of a branch's specialist ended because its model kept finding nothing to test."""
 
 
 class SessionFinished(RuntimeError):
@@ -350,7 +342,6 @@ class SpecialistRuntime:
 
     async def _supervise(self, state: _Branch) -> None:
         restarts = _Restarts()
-        idle = 0
         ready = False
         while True:
             start = SessionStart(state.name, state.start_commit, state.k, state.task)
@@ -369,10 +360,6 @@ class SpecialistRuntime:
             except SessionIdle as error:
                 await state.session.stop()
                 logger.info("the specialist of %s found nothing to test: %s", state.name, error)
-                idle = 0 if error.tested else idle + 1
-                if idle < MAX_IDLE_SESSIONS:
-                    await _notice(state, _idle_restarted(error))
-                    continue
                 state.session, state.gave_up = None, True
                 record = await self._close_direction(state)
                 await _notice(state, f"the specialist found nothing to test ({error}); it is not restarted{record}")
@@ -486,25 +473,20 @@ async def _notice(state: _Branch, content: str) -> None:
     await state.blackboard.append_branch_log(BranchLogEntry(state.name, BranchLogType.RESULT, f"{NOTICE} {content}"))
 
 
-#: How the notices of a crashed and of an idle session's restart open.
-_CRASHED, _IDLE = "the specialist crashed (", "the specialist found nothing to test ("
+#: How the notice of a crashed session's restart opens.
+_CRASHED = "the specialist crashed ("
 
 
 def restart_notice(content: str) -> bool:
     """Whether the branch-log ``content`` is the runtime's notice that a session ended and the next one starts: the
     next session is told why in its own first message, so the notice brings it nothing new."""
-    return content.startswith((f"{NOTICE} {_CRASHED}", f"{NOTICE} {_IDLE}"))
+    return content.startswith(f"{NOTICE} {_CRASHED}")
 
 
 def _restarted(error: Exception) -> str:
     resumed = isinstance(error, SessionCrashed) and error.resumable
     how = "resuming its conversation" if resumed else "with a fresh session"
     return f"{_CRASHED}{error!r}) and is restarted on this branch, {how}"
-
-
-def _idle_restarted(error: SessionIdle) -> str:
-    how = "resumes its conversation" if error.resumable else "starts a fresh session"
-    return f"{_IDLE}{error}); the branch {how}"
 
 
 def _log_failure(task: asyncio.Task[None]) -> None:
@@ -514,7 +496,6 @@ def _log_failure(task: asyncio.Task[None]) -> None:
 
 
 __all__ = [
-    "MAX_IDLE_SESSIONS",
     "MAX_LOSS_RESTARTS",
     "MAX_RESTARTS",
     "RESTART_WINDOW_S",

@@ -419,46 +419,9 @@ async def test_a_turn_that_called_tools_but_tested_nothing_counts_half_an_idle_t
         await _until(lambda n=nudged: len(rig.runner.sent) == n, f"nudge {nudged}")
     _end_turn(rig, _WORKED)
 
-    with pytest.raises(SessionIdle) as idle:
+    with pytest.raises(SessionIdle):
         await asyncio.wait_for(running, 1)
     assert len(rig.runner.sent) == 2 * IDLE_TURNS - 1
-    assert not idle.value.tested
-
-
-async def test_an_idle_session_says_whether_it_submitted_a_test(rig):
-    session = rig.session(nudge_waits_s=NO_WAITS)
-    running = asyncio.create_task(session.run())
-    await _until(lambda: len(rig.runner.specs) == 1, "the launch")
-    await rig.toolbox_blackboard.write_request(request("r1", intent(BRANCH, rig.root)))
-    await rig.toolbox_blackboard.write_result(result("r1"))
-
-    for sent in range(1, IDLE_TURNS + 1):
-        _end_turn(rig)
-        await _until(lambda n=sent: len(rig.runner.sent) == n, f"message {sent}")
-    _end_turn(rig)
-
-    with pytest.raises(SessionIdle) as idle:
-        await asyncio.wait_for(running, 1)
-    assert idle.value.tested
-
-
-async def test_a_profile_is_no_tested_candidate_for_an_idle_session(rig):
-    session = rig.session(nudge_waits_s=NO_WAITS)
-    running = asyncio.create_task(session.run())
-    await _until(lambda: len(rig.runner.specs) == 1, "the launch")
-    await rig.toolbox_blackboard.write_request(
-        request("p1", intent(BRANCH, rig.root), kind=TestKind.PROFILE, purpose=Purpose.PROFILE)
-    )
-    await rig.toolbox_blackboard.write_result(result("p1"))
-
-    for sent in range(1, IDLE_TURNS + 1):
-        _end_turn(rig)
-        await _until(lambda n=sent: len(rig.runner.sent) == n, f"message {sent}")
-    _end_turn(rig)
-
-    with pytest.raises(SessionIdle) as idle:
-        await asyncio.wait_for(running, 1)
-    assert not idle.value.tested
 
 
 async def test_what_arrives_within_the_patience_wakes_the_model_instead_of_a_nudge(rig):
@@ -878,24 +841,6 @@ async def test_a_resume_after_the_branch_head_moved_resets_the_worktree_and_says
 _TOO_LONG = {"type": "result", "subtype": "success", "is_error": True, "result": "Prompt is too long"}
 
 
-_SUCCESS = {"type": "result", "subtype": "success"}
-
-
-async def _idle_after_turns(rig, *last) -> SessionIdle:
-    """Run a session whose first launch ends its turns with nothing to test, the last one logging ``last``."""
-    session = rig.session(nudge_waits_s=NO_WAITS)
-    running = asyncio.create_task(session.run())
-    await _until(lambda: len(rig.runner.specs) == 1, "the launch")
-    for nudged in range(1, IDLE_TURNS):
-        _end_turn(rig, _INIT, _call(50_000))
-        await _until(lambda n=nudged: len(rig.runner.sent) == n, f"nudge {nudged}")
-    with (rig.workspace / "process.log").open("a") as log:
-        log.writelines(json.dumps(row) + "\n" for row in last)
-    with pytest.raises(SessionIdle) as idle:
-        await asyncio.wait_for(running, 1)
-    return idle.value
-
-
 @dataclass(frozen=True)
 class _Landed:
     """Another branch's commit ``tip``, merged onto the integration head as ``onto`` in the repository."""
@@ -926,70 +871,6 @@ async def _move_integration(rig) -> str:
     landed = await _land_merge(rig)
     await _judge_merge(rig, landed)
     return landed.onto
-
-
-async def test_an_idle_end_under_the_context_cap_is_resumed_with_what_changed_since(rig):
-    idle = await _idle_after_turns(rig, _call(50_000), _SUCCESS)
-    await rig.toolbox_blackboard.write_request(request("r1", intent(BRANCH, rig.root)))
-    await rig.toolbox_blackboard.write_result(result("r1"))
-    moved = await _move_integration(rig)
-
-    session, running = await _next_launch(rig, 2)
-    await session.stop()
-    await asyncio.wait_for(running, 1)
-
-    assert idle.resumable
-    first, resumed = rig.runner.specs
-    assert _flag(resumed.argv, "--resume") == _flag(first.argv, "--session-id")
-    assert "--session-id" not in resumed.argv
-    message = rig.runner.prompts[1]
-    assert "Startup brief" not in message and "result r1" in message
-    assert "nothing to test" in message and "as you left it" in message
-    assert f"integration head moved from {rig.root} to {moved}" in message
-    assert f"Where the session's gains stack:\nThe integration head is {moved}" in message
-
-
-async def test_an_idle_resume_with_nothing_new_says_so_and_names_the_unmoved_integration_head(rig):
-    await _idle_after_turns(rig, _call(50_000), _SUCCESS)
-
-    session, running = await _next_launch(rig, 2, idle_resume_wait_s=0.0)
-    await session.stop()
-    await asyncio.wait_for(running, 1)
-
-    message = rig.runner.prompts[1]
-    assert "--resume" in rig.runner.specs[1].argv
-    assert "Nothing arrived for your branch" in message and f"integration head is still {rig.root}" in message
-    assert "gains stack" not in message
-
-
-@pytest.mark.parametrize(
-    "rows",
-    [(_call(RESUME_CONTEXT_MAX), _SUCCESS), (_TOO_LONG,)],
-    ids=["past-the-context-cap", "prompt-too-long"],
-)
-async def test_an_idle_end_with_a_full_context_is_followed_by_a_fresh_conversation(rig, rows):
-    idle = await _idle_after_turns(rig, *rows)
-
-    session, running = await _next_launch(rig, 2)
-    await session.stop()
-    await asyncio.wait_for(running, 1)
-
-    assert not idle.resumable
-    first, second = (spec.argv for spec in rig.runner.specs)
-    assert "--resume" not in second and _flag(second, "--session-id") != _flag(first, "--session-id")
-    assert rig.runner.prompts[1].startswith("Startup brief")
-
-
-async def test_a_crash_after_an_idle_resume_is_resumed_as_a_crash(rig):
-    await _idle_after_turns(rig, _call(50_000), _SUCCESS)
-    await _crash_after_a_turn(rig, rig.session(idle_resume_wait_s=0.0), 2)
-
-    session, running = await _next_launch(rig, 3)
-    await session.stop()
-    await asyncio.wait_for(running, 1)
-
-    assert "--resume" in rig.runner.specs[2].argv
-    assert "exited 1" in rig.runner.prompts[2] and "nothing to test" not in rig.runner.prompts[2]
 
 
 async def test_a_session_that_ended_well_is_followed_by_a_fresh_conversation(rig):
@@ -1114,10 +995,6 @@ async def test_codex_never_resumes(rig):
     assert "--session-id" not in rig.runner.specs[0].argv
 
 
-_IDLE_RESTART = (
-    f"{NOTICE} the specialist found nothing to test (its model ended 3 turns in a row with nothing to test); the "
-    "branch resumes its conversation"
-)
 _CRASH_RESTART = (
     f"{NOTICE} the specialist crashed (SessionCrashed('the agent CLI exited 1')) and is restarted on this branch, "
     "resuming its conversation"
@@ -1130,81 +1007,17 @@ async def _log(rig, *contents: str) -> None:
         await rig.blackboard.append_branch_log(BranchLogEntry(BRANCH, BranchLogType.RESULT, content))
 
 
-async def test_an_idle_resume_leaves_the_runtime_s_notice_of_the_restart_out_of_what_arrived(rig):
-    await _idle_after_turns(rig, _call(50_000), _SUCCESS)
-    await _log(rig, _IDLE_RESTART)
-
-    session, running = await _next_launch(rig, 2, idle_resume_wait_s=0.0)
-    await session.stop()
-    await asyncio.wait_for(running, 1)
-
-    message = rig.runner.prompts[1]
-    assert restart_notice(_IDLE_RESTART) and "--resume" in rig.runner.specs[1].argv
-    assert "Nothing arrived for your branch" in message and "resumes its conversation" not in message
-
-
 async def test_a_crash_resume_shows_the_notices_that_arrived_but_not_the_one_of_its_own_restart(rig):
     await _crash_after_a_turn(rig, rig.session(), 1)
     await _log(rig, _MORE_ROOM, _CRASH_RESTART)
 
-    session, running = await _next_launch(rig, 2, idle_resume_wait_s=60.0)
+    session, running = await _next_launch(rig, 2)
     await session.stop()
     await asyncio.wait_for(running, 1)
 
     message = rig.runner.prompts[1]
     assert restart_notice(_CRASH_RESTART) and "--resume" in rig.runner.specs[1].argv
     assert "3 tests running at once" in message and "is restarted on this branch" not in message
-
-
-@pytest.mark.parametrize("arrival", ["result", "notice", "integration"])
-async def test_an_idle_resume_waits_until_something_arrives_for_its_branch(rig, arrival):
-    await _idle_after_turns(rig, _call(50_000), _SUCCESS)
-    await rig.toolbox_blackboard.write_request(request("r1", intent(BRANCH, rig.root)))
-    await _log(rig, _IDLE_RESTART)
-    session = rig.session(idle_resume_wait_s=60.0)
-    running = asyncio.create_task(session.run())
-
-    await asyncio.sleep(0.3)
-    assert len(rig.runner.specs) == 1
-    if arrival == "result":
-        await rig.toolbox_blackboard.write_result(result("r1"))
-        said = "result r1"
-    elif arrival == "notice":
-        await _log(rig, _MORE_ROOM)
-        said = "3 tests running at once"
-    else:
-        said = f"integration head moved from {rig.root} to {await _move_integration(rig)}"
-    await _until(lambda: len(rig.runner.specs) == 2, "the resume")
-    await session.stop()
-    await asyncio.wait_for(running, 1)
-
-    assert "--resume" in rig.runner.specs[1].argv and said in rig.runner.prompts[1]
-
-
-async def test_an_idle_resume_nothing_reaches_starts_once_its_wait_is_over(rig):
-    await _idle_after_turns(rig, _call(50_000), _SUCCESS)
-    session = rig.session(idle_resume_wait_s=0.6)
-    running = asyncio.create_task(session.run())
-
-    await asyncio.sleep(0.2)
-    assert len(rig.runner.specs) == 1
-    await _until(lambda: len(rig.runner.specs) == 2, "the resume once the wait is over")
-    await session.stop()
-    await asyncio.wait_for(running, 1)
-
-    assert "--resume" in rig.runner.specs[1].argv and "Nothing arrived" in rig.runner.prompts[1]
-
-
-async def test_a_branch_stopped_while_its_idle_resume_waits_launches_nothing(rig):
-    await _idle_after_turns(rig, _call(50_000), _SUCCESS)
-    session = rig.session(idle_resume_wait_s=60.0)
-    running = asyncio.create_task(session.run())
-
-    await asyncio.sleep(0.1)
-    await session.stop()
-    await asyncio.wait_for(running, 1)
-
-    assert len(rig.runner.specs) == 1
 
 
 async def test_a_fresh_launch_shows_what_the_integration_head_holds_and_what_the_head_lacks(rig, tmp_path):

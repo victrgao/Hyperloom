@@ -800,7 +800,7 @@ async def test_each_branch_keeps_its_focus_and_every_branch_shares_one_index_and
 
 
 ACT_MUL = "_act_mul_and_dynamic_fp8_group_quant_kernel"
-GAVE_UP = "gave_up: its specialist gave up: its sessions in a row found nothing to test"
+GAVE_UP = "gave_up: its specialist gave up: its session found nothing to test"
 FUSED = {
     "why": "no_ceiling_above_bar",
     "detail": "already fused, at 5 TB/s",

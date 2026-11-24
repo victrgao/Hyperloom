@@ -17,7 +17,7 @@ class SpecialistStatus:
 
     ``running`` says a session of it runs or will be restarted. ``crashes`` counts its sessions that crashed, the lost
     ones included, not those that ended finding nothing to test; ``lost`` counts those that lost their heartbeat.
-    ``gave_up`` says the runtime stopped restarting it after repeated crashes, losses or sessions in a row that found
+    ``gave_up`` says the runtime stopped restarting it after repeated crashes or losses, or a session that ended finding
     nothing to test, ``judge_failed`` that it was stopped because judging the branch failed; the branch keeps its slot
     either way. ``unready`` says why its specialist could not be started (its session not built, or its preflight
     failed), empty when it was. ``finished`` says why a third-party agent's run ended of itself (its exit, such as its

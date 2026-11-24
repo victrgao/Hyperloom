@@ -125,7 +125,7 @@ def gave_up_reason(status: SpecialistStatus) -> str:
     if status.finished:
         return status.finished
     if not status.crashed_out:
-        why = status.exhausted or "its sessions in a row found nothing to test"
+        why = status.exhausted or "its session found nothing to test"
         return f"its specialist gave up: {why}"
     lost = f", {status.lost} of them with a lost heartbeat" if status.lost else ""
     return f"{GAVE_UP_AFTER_CRASHES} {status.crashes} crashes{lost}"

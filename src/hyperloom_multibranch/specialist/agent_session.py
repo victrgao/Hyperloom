@@ -12,7 +12,8 @@ a test of the branch, another branch's profile of its head or its long dev lease
 ``WAIT_WAKE_S``: the reaper reads only the CLI's own output, so a CLI silent longer is taken for a hung one. A turn
 that ends with no test of the branch in flight (one waiting on its native builds is) and no process running in its
 long dev lease waits a patience for something to arrive, and is nudged when nothing did; as many such turns in a
-row as there are patiences end the session with :class:`SessionIdle`, which is no crash. A turn that called
+row as there are patiences end the session with :class:`SessionIdle`, which is no crash and ends the specialist's
+run: a model that says so often that it has nothing to test says the same when asked once more. A turn that called
 tools counts half: a model reading, writing a patch or having a claim refused is working, yet one that never submits
 still ends.
 A session that ends as a session should, its CLI exiting or its deadline reached, is followed by a fresh one: a
@@ -30,10 +31,7 @@ A Claude session runs under a conversation id it is given at launch, written wit
 ``cli_session.json`` in the workspace before the CLI starts and updated at each turn's end. A Claude CLI that exits with
 an error or is lost after its conversation finished a turn is resumed by the next run: ``--resume`` on that
 conversation, told what arrived since and whether its worktree was kept, which it is while the branch head did not move.
-A session that ends idle is resumed the same way, told what changed since its last turn, the integration head included,
-as a fresh briefing would bring little the conversation lacks; it first waits, at most ``IDLE_RESUME_WAIT_S``, for
-something to arrive or the integration head to move, so it has something to act on. Neither resume lists the runtime's
-notice of the restart among what arrived. A clean end, a conversation past ``RESUME_CONTEXT_MAX`` or one the model
+The resume does not list the runtime's notice of the restart among what arrived. A clean end, a conversation past ``RESUME_CONTEXT_MAX`` or one the model
 refused as too long, and a resumed CLI that crashes again before finishing a turn are followed by a fresh session. A
 resume the CLI refuses at once is followed by a fresh session in the same run, with a notice and no crash. A
 conversation record that cannot be read means a fresh session and a warning.
@@ -106,9 +104,7 @@ from hyperloom_multibranch.specialist.following import (
 from hyperloom_multibranch.specialist.judging import NOTICE, left_unjudged
 from hyperloom_multibranch.specialist.llm_usage import launch_cost, launch_usage
 from hyperloom_multibranch.specialist.prompts import (
-    IntegrationHeads,
     Resume,
-    idle_resume_message,
     integration_section,
     launch_prompt,
     lease_wake_message,
@@ -148,9 +144,6 @@ WAITED_END = "its model ended its turn to wait for a test, which has its result 
 #: sessions' Claude model, past the 73k to 231k the branches of a 12-hour session peaked at, so a resume never
 #: starts close to the window and rewriting the whole conversation to the cache stays cheaper than a fresh briefing.
 RESUME_CONTEXT_MAX = 600_000
-#: How long the resume of an idle session waits for something to arrive first: about one test's time, so a result or
-#: a merge usually lands within it, while a branch that nothing reaches still goes on before its slot sits idle long.
-IDLE_RESUME_WAIT_S = 600.0
 #: Where a re-root writes the patches of the branch's change that no longer apply on the integration head.
 REROOTED_DIR = "rerooted"
 PROMPT_FILE, ROLE_FILE, DONE_FILE, HEARTBEAT_FILE, CLI_SESSION_FILE = (
@@ -271,8 +264,7 @@ class AgentSetup:
     ``env`` is the environment the CLI runs with, the branch's MCP token added; the session decides nothing about it.
     ``briefs(branch, head)`` rebuilds a branch's brief at the head a launch starts at; without it, every launch shows
     the brief the branch was started with. ``nudge_waits_s`` are the patiences of idle turns in a row; there are as
-    many idle turns as patiences. ``idle_resume_wait_s`` bounds how long the resume of an idle session waits for
-    something to arrive. ``dev_leases`` are the session's dev sandboxes, ``None`` when it lends none: a
+    many idle turns as patiences. ``dev_leases`` are the session's dev sandboxes, ``None`` when it lends none: a
     branch's lease is given back when its run ends, however it ended, and when it is stopped, unless it is a long one
     with a process running, which only the branch's stop gives back. A CLI waiting on such a process, a test of its
     branch or another branch's profile of its head is woken every ``wait_wake_s``.
@@ -295,7 +287,6 @@ class AgentSetup:
     min_session_seconds: float = MIN_SESSION_S
     poll_seconds: float = 5.0
     nudge_waits_s: tuple[float, ...] = NUDGE_WAITS_S
-    idle_resume_wait_s: float = IDLE_RESUME_WAIT_S
     clock: Callable[[], float] = time.time
     dev_leases: DevLeaseHolder | None = None
     wait_wake_s: float = WAIT_WAKE_S
@@ -330,7 +321,6 @@ class AgentSession:
         self._handle: AgentHandle | None = None
         self._beat: Beat | None = None
         self._recorded: Mapping[str, TokenCounts] = {}
-        self._requested: frozenset[str] = frozenset()
 
     async def preflight(self) -> None:
         """Nothing to prepare: the CLI is the image's and the worktree the session's."""
@@ -342,7 +332,6 @@ class AgentSession:
     async def run(self) -> None:
         try:
             grant = self._setup.tokens.issue(self._start.branch, frozenset({SCOPE_SPECIALIST}))
-            self._requested = await self._branch_requests()
             last_end = ""
             while not self._stopped.is_set():
                 last_end = await self._session(grant, last_end)
@@ -405,8 +394,7 @@ class AgentSession:
         return _Launch(prompt, seen, cli)
 
     async def _resumed(self) -> _Launch | None:
-        """The launch that goes on with the conversation the last run's CLI crashed or idled in, an idle one once
-        something arrived or its wait is over; ``None`` when there is none.
+        """The launch that goes on with the conversation the last run's CLI crashed in; ``None`` when there is none.
 
         The worktree is kept as the CLI left it while the branch head did not move, so its uncommitted edits survive;
         the CLI is shown what arrived from where the conversation's last finished turn had seen up to."""
@@ -415,54 +403,29 @@ class AgentSession:
         cli = await asyncio.to_thread(self._read_cli)
         if cli is None or not cli.resumable:
             return None
-        followed = await self._until_news(cli) if cli.idle else None
-        followed = followed or await self._follow()
+        followed = await self._follow()
         branch, worktree = self._start.branch, self._place.worktree
         head = await self._setup.repo.head(branch)
         kept = await asyncio.to_thread(worktree.head) == head
         if not kept:
             head = await sync_to_head(self._setup.repo, branch, worktree)
-        integration = IntegrationHeads(cli.integration, await self._integration_head())
-        seen = _Seen(cli.seen_cursor, cli.logged, integration=integration.now)
+        integration = await self._integration_head()
+        seen = _Seen(cli.seen_cursor, cli.logged, integration=integration)
         items, notices = await self._arrived(seen)
-        resume = Resume(cli.reason, head, str(worktree.path), kept=kept)
-        if cli.idle:
-            prompt = idle_resume_message(resume, integration, items, notices)
-        else:
-            prompt = resume_message(resume, items, notices)
-        if followed or integration.seen != integration.now:
+        prompt = resume_message(Resume(cli.reason, head, str(worktree.path), kept=kept), items, notices)
+        if followed or cli.integration != integration:
             holdings = _joined(followed.detail if followed else "", await self._holdings(head))
             prompt = _joined(prompt, integration_section(holdings))
         cli = replace(
             cli,
             resumable=False,
-            idle=False,
             resumes_in_row=cli.resumes_in_row + 1,
             head=head,
-            integration=integration.now,
+            integration=integration,
             seen_cursor=seen.cursor,
             logged=seen.logged,
         )
         return _Launch(prompt, seen, cli, resumed=True)
-
-    async def _until_news(self, cli: _CliState) -> Followed | None:
-        """Wait, with no CLI running, until something arrives past what the idle conversation ``cli`` saw, the
-        integration head moves from where it saw it or the branch follows it as its specialist asked, at most
-        ``idle_resume_wait_s`` and while the session runs: a model resumed with nothing new to act on idles again, and
-        its branch's last idle session goes with it. What following the integration head did, when it did."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._setup.idle_resume_wait_s
-        while not self._stopped.is_set() and loop.time() < deadline:
-            followed = await self._follow()
-            if followed is not None:
-                return followed
-            if any(await self._arrived(_Seen(cli.seen_cursor, cli.logged))):
-                return None
-            if await self._integration_head() != cli.integration:
-                return None
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._stopped.wait(), min(self._setup.poll_seconds, deadline - loop.time()))
-        return None
 
     async def _run_launch(self, grant: SpecialistGrant, launch: _Launch) -> _Ended | None:
         """Run ``launch``'s CLI to its end; ``None`` when the session was stopped meanwhile."""
@@ -500,9 +463,9 @@ class AgentSession:
             raise SessionCrashed(reason, lost=lost, waiting=waiting, worked=bool(last_end), resumable=resumable)
         return "it reached its deadline" if status.timed_out else "its model finished its turn"
 
-    async def _keep_for_resume(self, launch: _Launch, reason: str, *, idle: bool = False) -> bool:
-        """Mark the crashed or ``idle`` launch's conversation for the next run to resume, when it is worth going on
-        with: it finished a turn since its last resume, and its context has room left."""
+    async def _keep_for_resume(self, launch: _Launch, reason: str) -> bool:
+        """Mark the crashed launch's conversation for the next run to resume, when it is worth going on with: it
+        finished a turn since its last resume, and its context has room left."""
         cli, turns = launch.cli, launch.turns
         if cli is None or turns is None:
             return False
@@ -512,7 +475,7 @@ class AgentSession:
             and cli.context_tokens < RESUME_CONTEXT_MAX
             and not turns.context_exceeded
         )
-        launch.cli = replace(cli, resumable=resumable, idle=idle and resumable, reason=reason)
+        launch.cli = replace(cli, resumable=resumable, reason=reason)
         await asyncio.to_thread(self._write_cli, launch.cli)
         return resumable
 
@@ -593,22 +556,18 @@ class AgentSession:
             strain = 0 if message else strain + (_WORKED if turns is not None and turns.worked() else _SILENT)
             quiet = 0 if message else quiet + 1
             if strain >= _SILENT * len(waits):
-                raise await self._idle_end(handle, launch, quiet)
+                raise await self._idle_end(handle, quiet)
             try:
                 await self._setup.runner.send(handle, self._setup.command.message(message or nudge_message()).encode())
             except AgentEnded:
                 return await self._setup.runner.poll(handle)
             sent += 1
 
-    async def _idle_end(self, handle: AgentHandle, launch: _Launch, quiet: int) -> SessionIdle:
-        """End the CLI whose model ended ``quiet`` turns in a row with nothing to test, keeping its conversation for
-        the next run when it has room left; what the run raises."""
+    async def _idle_end(self, handle: AgentHandle, quiet: int) -> SessionIdle:
+        """End the CLI whose model ended ``quiet`` turns in a row with nothing to test; what the run raises."""
         self._handle = None
         await self._finish(handle, cancel=True)
-        tested = await self._branch_requests() != self._requested
-        reason = f"its model ended {quiet} turns in a row with nothing to test"
-        resumable = await self._keep_for_resume(launch, reason, idle=True)
-        return SessionIdle(reason, tested=tested, resumable=resumable)
+        return SessionIdle(f"its model ended {quiet} turns in a row with nothing to test")
 
     async def _wake(self, handle: AgentHandle, seen: _Seen, patience: float) -> str | None:
         """Wait, beating the heartbeat, until something arrives for the branch, and move ``seen`` past it; or until
@@ -675,16 +634,6 @@ class AgentSession:
         ]
         seen.cursor, seen.logged = page.cursor, len(log)
         return page.items, notices
-
-    async def _branch_requests(self) -> frozenset[str]:
-        """The branch's candidate tests: a profile measures no candidate, so it does not reset an idle count."""
-        branch = self._start.branch
-        records = (await self._place.blackboard.snapshot()).records
-        return frozenset(
-            record.request_id
-            for record in records
-            if record.request.branch == branch and record.request.kind is TestKind.TEST
-        )
 
     async def _pending(self, seen: _Seen) -> str:
         """The wake for what of the branch still runs, its long dev lease's process, a test of it or another branch's
@@ -896,8 +845,7 @@ class _CliState:
     """A Claude CLI's conversation as ``cli_session.json`` keeps it: its id; the turns it finished without an error,
     and the tokens its last call read; the resumes since it last finished one; the branch and integration heads and
     the inbox cursor and branch-log entries it had seen at its last finished turn; and whether the next run resumes
-    it, with why it stopped and whether that was an idle end. ``resumable`` is set only when a launch crashed or ended
-    idle, so a clean end leaves it unset."""
+    it, with why it stopped. ``resumable`` is set only when a launch crashed, so a clean end leaves it unset."""
 
     session_id: str
     turns_done: int = 0
@@ -908,7 +856,6 @@ class _CliState:
     seen_cursor: str = ""
     logged: int = 0
     resumable: bool = False
-    idle: bool = False
     reason: str = ""
 
     @classmethod
@@ -1032,7 +979,6 @@ def _describe(status: AgentStatus, seconds: float) -> str:
 
 __all__ = [
     "CLI_SESSION_FILE",
-    "IDLE_RESUME_WAIT_S",
     "RESUME_CONTEXT_MAX",
     "NUDGE_WAITS_S",
     "SPECIALIST_SESSION_S",

@@ -310,7 +310,7 @@ async def test_a_direction_given_to_a_branch_counts_as_held(session):
 
 
 async def test_a_direction_a_specialist_gave_up_on_is_not_dealt_again_on_the_same_start_commit(session):
-    runs = _Runs(errors=(_idle(), _idle()))
+    runs = _Runs(errors=(_idle(),))
     runtime = session.runtime(runs)
     head = await session.repo.head(BRANCH)
     others = [f"b{index}" for index in range(1, len(DIRECTIONS))]
@@ -323,7 +323,7 @@ async def test_a_direction_a_specialist_gave_up_on_is_not_dealt_again_on_the_sam
         await runtime.stop(name)
     await runtime.start("same", head)
     await runtime.start("moved", "f" * 40)
-    await _until(lambda: _true(len(runs.started) == len(others) + 4), "the late specialists to start")
+    await _until(lambda: _true(len(runs.started) == len(others) + 3), "the late specialists to start")
     for name in ("same", "moved"):
         await runtime.stop(name)
 
@@ -509,39 +509,38 @@ async def test_a_branch_whose_preflight_failed_gives_back_what_it_holds_when_it_
     assert runs.released == [BRANCH]
 
 
-def _idle(tested: bool = False, resumable: bool = False) -> SessionIdle:
-    return SessionIdle("its model ended 3 turns in a row with nothing to test", tested=tested, resumable=resumable)
+def _idle() -> SessionIdle:
+    return SessionIdle("its model ended 3 turns in a row with nothing to test")
 
 
 @pytest.mark.parametrize("kind", ["", "direction", "repair"])
-async def test_two_idle_sessions_in_a_row_end_the_specialist_after_one_fresh_session_and_no_crash(session, kind):
+async def test_an_idle_session_ends_the_specialist_with_no_restart_and_no_crash(session, kind):
     blocked = Judgement(
         Verdict.BLOCKED, 3.0, 2.0, ("s0-4", "s0-5"), {"output_throughput": 1030.0}, AccuracyVerdict.FAILED
     )
     repair = RepairRequest(intent("s0", "c0"), delta(), blocked, "per-tensor KV scales; scale per head")
     tasks = {"": BranchTask(), "direction": BranchTask(direction="the user's own"), "repair": BranchTask(repair=repair)}
-    runs = _Runs(errors=(_idle(), _idle()))
+    runs = _Runs(errors=(_idle(),))
     runtime = session.runtime(runs)
 
     await runtime.start(BRANCH, await session.repo.head(BRANCH), tasks[kind])
     await _until(lambda: _any_notice(session, "not restarted"), "the runtime to give up")
 
-    assert len(runs.started) == 2
+    assert len(runs.started) == 1
     notices = await session.notices()
-    assert any("starts a fresh session" in notice for notice in notices)
     assert any("found nothing to test" in notice and "not restarted" in notice for notice in notices)
     assert await runtime.status(BRANCH) == SpecialistStatus(False, 0, 0, True, False)
     await runtime.stop(BRANCH)
 
 
-async def test_idle_sessions_after_a_crash_give_up_as_idle_not_as_crashed_out(session):
-    runs = _Runs(errors=(RuntimeError("the agent CLI exited 1"), _idle(), _idle()))
+async def test_an_idle_session_after_a_crash_gives_up_as_idle_not_as_crashed_out(session):
+    runs = _Runs(errors=(RuntimeError("the agent CLI exited 1"), _idle()))
     runtime = session.runtime(runs)
 
     await runtime.start(BRANCH, await session.repo.head(BRANCH))
     await _until(lambda: _any_notice(session, "not restarted"), "the runtime to give up")
 
-    assert len(runs.started) == 3
+    assert len(runs.started) == 2
     assert await runtime.status(BRANCH) == SpecialistStatus(False, 1, 0, True, False)
     await runtime.stop(BRANCH)
 
@@ -584,7 +583,7 @@ async def test_a_branch_whose_start_commit_has_every_direction_closed_is_dealt_n
 
 
 async def test_a_specialist_s_exhausted_record_is_in_its_give_up_notice_and_closes_its_direction_on_that_head(session):
-    runs = _Runs(errors=(_idle(), _idle()))
+    runs = _Runs(errors=(_idle(),))
     runtime = session.runtime(runs)
     head, moved = await session.repo.head(BRANCH), "e" * 40
     record = {"direction": DIRECTIONS[0], "head": moved, "tried": ["r1"], "why": "blocked_by_tool"}
@@ -597,7 +596,7 @@ async def test_a_specialist_s_exhausted_record_is_in_its_give_up_notice_and_clos
     status = await runtime.status(BRANCH)
     await runtime.stop(BRANCH)
     await runtime.start("next", moved)
-    await _until(lambda: _true(len(runs.started) == 3), "the next specialist to start")
+    await _until(lambda: _true(len(runs.started) == 2), "the next specialist to start")
     await runtime.stop("next")
 
     (given_up,) = [notice for notice in await session.notices() if "not restarted" in notice]
@@ -651,32 +650,6 @@ async def test_an_exhausted_record_naming_no_session_direction_closes_nothing_an
 
     assert runs.started[-1].start.task.direction == DIRECTIONS[2]
     assert "names none of the session's directions" in caplog.text
-
-
-async def test_an_idle_session_whose_conversation_is_resumed_says_so_and_still_counts_as_idle(session):
-    runs = _Runs(errors=(_idle(resumable=True), _idle(resumable=True)))
-    runtime = session.runtime(runs)
-
-    await runtime.start(BRANCH, await session.repo.head(BRANCH))
-    await _until(lambda: _any_notice(session, "not restarted"), "the runtime to give up")
-    await runtime.stop(BRANCH)
-
-    assert len(runs.started) == 2
-    notices = await session.notices()
-    assert any("found nothing to test" in n and "resumes its conversation" in n for n in notices)
-    assert not any("starts a fresh session" in n for n in notices)
-
-
-async def test_an_idle_session_that_submitted_a_test_starts_the_count_again(session):
-    runs = _Runs(errors=(_idle(), _idle(tested=True), _idle()))
-    runtime = session.runtime(runs)
-
-    await runtime.start(BRANCH, await session.repo.head(BRANCH))
-    await _until(lambda: _true(len(runs.started) == 4), "a fresh session after each idle one")
-    status = await runtime.status(BRANCH)
-    await runtime.stop(BRANCH)
-
-    assert not status.gave_up
 
 
 async def test_the_status_is_known_only_while_the_runtime_runs_the_branch(session):
@@ -818,18 +791,18 @@ async def test_a_crash_notice_says_whether_the_conversation_is_resumed(session):
 
 
 async def test_the_notices_of_a_restart_are_told_apart_from_the_branch_s_other_notices(session):
-    errors = (_idle(resumable=True), SessionCrashed("the agent CLI exited 1", resumable=True), _idle(tested=True))
+    errors = (SessionCrashed("the agent CLI exited 1", resumable=True), RuntimeError("boom"))
     runs = _Runs(errors=errors)
     runtime = session.runtime(runs)
 
     await runtime.start(BRANCH, await session.repo.head(BRANCH))
-    await _until(lambda: _true(len(runs.started) == 4), "every restart")
+    await _until(lambda: _true(len(runs.started) == 3), "every restart")
     await runtime.set_k(BRANCH, 3)
     await runtime.stop(BRANCH)
 
     notices = await session.notices()
-    restarts = [notice for notice in notices if "is restarted" in notice or "the branch" in notice]
-    assert len(restarts) == 3 and all(restart_notice(notice) for notice in restarts)
+    restarts = [notice for notice in notices if "is restarted" in notice]
+    assert len(restarts) == 2 and all(restart_notice(notice) for notice in restarts)
     assert [restart_notice(notice) for notice in notices if notice not in restarts] == [False]
 
 

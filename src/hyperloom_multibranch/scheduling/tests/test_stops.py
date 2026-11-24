@@ -85,7 +85,7 @@ def test_the_stop_of_a_gave_up_branch_names_the_counts_the_runtime_kept() -> Non
 
     assert gave_up_reason(crashed) == "its specialist gave up after 4 crashes"
     assert gave_up_reason(replace(crashed, crashes=3, lost=3)).endswith("3 crashes, 3 of them with a lost heartbeat")
-    assert gave_up_reason(idle).endswith("its sessions in a row found nothing to test")
+    assert gave_up_reason(idle).endswith("its session found nothing to test")
     assert gave_up_reason(replace(idle, crashes=1)) == gave_up_reason(idle)
     exhausted = "no_ceiling_above_bar: TP1 has no all-reduce; worth again if the TP grows"
     assert gave_up_reason(replace(idle, crashes=1, exhausted=exhausted)) == f"its specialist gave up: {exhausted}"
