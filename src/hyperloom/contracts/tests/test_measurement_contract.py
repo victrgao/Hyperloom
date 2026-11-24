@@ -24,10 +24,8 @@ from hyperloom.contracts.measurement import (
     BuildPayment,
     FailureClass,
     MeasurementError,
-    NOT_REPRODUCED,
     PhaseTiming,
     Purpose,
-    REPRODUCED,
     RequestClasses,
     RoundValue,
     SandboxFacts,
@@ -214,7 +212,7 @@ def test_accuracy_kind_needs_the_accuracy_flag() -> None:
 
 
 def test_repro_kind_needs_an_attachment() -> None:
-    with pytest.raises(MeasurementError, match="needs the reproduction case as an attachment"):
+    with pytest.raises(MeasurementError, match="needs its case as an attachment"):
         _request(kind=TestKind.REPRO, purpose=Purpose.REPRO)
     assert _request(kind=TestKind.REPRO, purpose=Purpose.REPRO, attachments=(ATTACH,)).attachments == (ATTACH,)
 
@@ -326,15 +324,20 @@ def test_result_document_with_unknown_values_is_refused() -> None:
         TestResult.from_document({**document, "rounds": [{"phase": "cooldown"}]})
 
 
-@pytest.mark.parametrize("verdict", ["", REPRODUCED, NOT_REPRODUCED])
-def test_a_repro_verdict_round_trips(verdict: str) -> None:
-    assert _roundtrip(_result(repro_verdict=verdict)).repro_verdict == verdict
+@pytest.mark.parametrize("code", [None, 0, 1, 3, -9])
+def test_a_case_exit_code_round_trips(code: int | None) -> None:
+    assert _roundtrip(_result(case_exit_code=code)).case_exit_code == code
 
 
-def test_a_document_written_before_the_repro_verdict_loads_with_none() -> None:
+@pytest.mark.parametrize(("verdict", "code"), [("not_reproduced", 0), ("reproduced", 1), ("", None), (None, None)])
+def test_a_document_written_while_a_result_carried_the_verdict_loads_with_the_exit_code_behind_it(
+    verdict: str | None, code: int | None
+) -> None:
     document = _result().to_document()
-    del document["repro_verdict"]
-    assert TestResult.from_document(document).repro_verdict == ""
+    del document["case_exit_code"]
+    if verdict is not None:
+        document["repro_verdict"] = verdict
+    assert TestResult.from_document(document).case_exit_code == code
 
 
 def test_a_cold_start_round_trips_and_a_document_written_before_it_loads_with_none() -> None:
@@ -406,11 +409,10 @@ def test_a_phase_document_without_card_time_or_point_loads_with_none_of_either()
     assert (phase.gpu_seconds, phase.point) == (0.0, None)
 
 
-def test_a_repro_verdict_is_one_of_the_two_verdicts() -> None:
-    with pytest.raises(MeasurementError, match="repro_verdict must be"):
-        _result(repro_verdict="fixed")
-    with pytest.raises(MeasurementError, match="repro_verdict must be"):
-        TestResult.from_document({**_result().to_document(), "repro_verdict": "maybe"})
+@pytest.mark.parametrize("code", ["1", True, 1.0, -256])
+def test_a_case_exit_code_is_an_exit_code(code: object) -> None:
+    with pytest.raises(MeasurementError, match="case_exit_code must be"):
+        _result(case_exit_code=code)
 
 
 @pytest.mark.parametrize(
@@ -420,9 +422,9 @@ def test_a_repro_verdict_is_one_of_the_two_verdicts() -> None:
         (Validity.MEASUREMENT_FAILED, FailureClass.INFRA),
     ],
 )
-def test_only_a_succeeded_result_has_a_repro_verdict(validity: Validity, failure_class: FailureClass) -> None:
-    with pytest.raises(MeasurementError, match="only a succeeded test has a repro_verdict"):
-        _result(validity=validity, failure_class=failure_class, repro_verdict=REPRODUCED)
+def test_only_a_succeeded_result_has_a_case_exit_code(validity: Validity, failure_class: FailureClass) -> None:
+    with pytest.raises(MeasurementError, match="only a succeeded test has a case_exit_code"):
+        _result(validity=validity, failure_class=failure_class, case_exit_code=1)
 
 
 def test_a_succeeded_result_has_no_failure_class() -> None:

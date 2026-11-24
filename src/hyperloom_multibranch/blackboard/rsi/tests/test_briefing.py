@@ -14,7 +14,7 @@ import pytest
 from hyperloom_kb import RemoteReadResult
 
 from hyperloom.common.perf_metric import TOTAL_TOKEN_THROUGHPUT
-from hyperloom.contracts.measurement import REPRODUCED, AttachmentRef, Purpose, TestKind, TestRequest
+from hyperloom.contracts.measurement import AttachmentRef, Purpose, TestKind, TestRequest
 from hyperloom.contracts.recipe import (
     ComponentChange,
     ComponentPatches,
@@ -245,7 +245,7 @@ async def _reproduced_on_the_root(root: Path, pool: CasePool, diagnosis: str) ->
         TestKind.REPRO, Purpose.REPRO, INTEGRATION_BRANCH, "c0", RecipeDelta(), attachments=case, request_id="p9"
     )
     await toolbox.write_request(repro)
-    await toolbox.write_result(dataclasses.replace(result("p9"), repro_verdict=REPRODUCED))
+    await toolbox.write_result(dataclasses.replace(result("p9"), case_exit_code=1))
 
 
 async def test_a_known_defect_is_clipped_as_every_lesson_is_so_a_long_diagnosis_leaves_the_rest_of_the_brief(

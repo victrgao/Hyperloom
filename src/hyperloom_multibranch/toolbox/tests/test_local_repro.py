@@ -5,8 +5,8 @@
 
 The shipped runner and the real local backend run in a local sandbox; only the inference server is replaced, by a
 stand-in that is "up" and measures nothing. What this proves is the wiring: acceptance accepts the kind, the case
-travels as an attachment into the sandbox, runs against the server's URL, and its verdict reaches the signed bundle,
-the result and the verification again.
+travels as an attachment into the sandbox, runs against the server's URL or with no server, and its exit code and
+output reach the signed bundle, the result and the verification again.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from hyperloom.contracts.measurement import FailureClass, Purpose, TestKind, TestResult, Validity
+from hyperloom.contracts.measurement import FailureClass, Purpose, TestKind, TestRequest, TestResult, Validity
 from hyperloom.measure.tests.gpu_free_host import IDLE_CARDS_PYTHON
 from hyperloom.measure.tests.hosted_fixtures import spec_context
 from hyperloom.measure.tests.repro_fixtures import case_attachment
@@ -83,9 +83,10 @@ class _Rig:
 
     async def repro(self, script: str) -> TestResult:
         case = case_attachment(self.spec.blobs, script)
-        request_id = await self.toolbox.submit_test(
-            req(kind=TestKind.REPRO, purpose=Purpose.REPRO, attachments=(case,))
-        )
+        return await self.result_of(req(kind=TestKind.REPRO, purpose=Purpose.REPRO, attachments=(case,)))
+
+    async def result_of(self, request: TestRequest) -> TestResult:
+        request_id = await self.toolbox.submit_test(request)
         await asyncio.wait_for(self.toolbox.drain(), 120)
         entry = self.toolbox._log.get(request_id)
         assert entry is not None and entry.outcome is not None and "result" in entry.outcome, entry
@@ -107,35 +108,34 @@ async def _rig(tmp_path: Path, checkout: tuple[Path, str], timeout_sec: int = 12
     return rig
 
 
-@pytest.mark.parametrize(("code", "verdict"), [(0, "not_reproduced"), (1, "reproduced")])
-async def test_a_repro_test_runs_its_attached_case_against_the_server_and_reports_the_signed_verdict(
-    tmp_path: Path, checkout: tuple[Path, str], code: int, verdict: str
+@pytest.mark.parametrize("code", [0, 1])
+async def test_a_repro_test_runs_its_attached_case_against_the_server_and_reports_the_signed_exit_code(
+    tmp_path: Path, checkout: tuple[Path, str], code: int
 ) -> None:
     rig = await _rig(tmp_path, checkout)
     try:
         result = await rig.repro(f'echo "case saw $HL_BASE_URL $HL_MODEL"\nexit {code}\n')
 
-        assert result.validity is Validity.SUCCEEDED and result.repro_verdict == verdict, result
+        assert result.validity is Validity.SUCCEEDED and result.case_exit_code == code, result
         assert result.rounds == () and result.accuracy == () and result.manifest_sha256
         landed = rig.session / result.output_dir / "repro"
         assert (landed / "case.log").read_text() == f"case saw {_BASE_URL} /nonexistent/model\n"
-        assert json.loads((landed / "verdict.json").read_text())["verdict"] == verdict
+        assert json.loads((landed / "verdict.json").read_text()) == {"exit_code": code}
         await rig.toolbox._executor.reverify(result)  # type: ignore[attr-defined]
     finally:
         await rig.toolbox.close()
 
 
-@pytest.mark.parametrize(("script", "timeout_sec"), [("exit 2\n", 120), ("sleep 600\n", 120)])
-async def test_a_case_that_cannot_run_to_a_verdict_is_a_failed_measurement_with_its_reason(
-    tmp_path: Path, checkout: tuple[Path, str], script: str, timeout_sec: int
+@pytest.mark.parametrize(("script", "code"), [("exit 2\n", 2), ("sleep 600\n", -9)])
+async def test_a_case_that_broke_or_was_killed_at_its_time_limit_is_a_result_not_a_failed_measurement(
+    tmp_path: Path, checkout: tuple[Path, str], script: str, code: int
 ) -> None:
-    rig = await _rig(tmp_path, checkout, timeout_sec)
+    rig = await _rig(tmp_path, checkout)
     try:
         result = await rig.repro(script)
 
-        assert result.validity is Validity.MEASUREMENT_FAILED and result.repro_verdict == "", result
-        assert result.failure_class is FailureClass.INFRA
-        assert "repro_case_error" in (result.failure_reason or ""), result.failure_reason
+        assert result.validity is Validity.SUCCEEDED and result.case_exit_code == code, result
+        assert len(result.attempts) == 1
     finally:
         await rig.toolbox.close()
 
@@ -147,26 +147,26 @@ async def test_a_server_that_does_not_boot_is_a_failure_of_the_candidate_as_for_
     try:
         result = await rig.repro("exit 0\n")
 
-        assert result.validity is Validity.CANDIDATE_FAILED and result.repro_verdict == "", result
+        assert result.validity is Validity.CANDIDATE_FAILED and result.case_exit_code is None, result
         assert result.failure_class is FailureClass.CANDIDATE
     finally:
         await rig.toolbox.close()
 
 
-async def test_a_tampered_verdict_is_not_verified(tmp_path: Path, checkout: tuple[Path, str]) -> None:
+async def test_a_tampered_exit_code_is_not_verified(tmp_path: Path, checkout: tuple[Path, str]) -> None:
     rig = await _rig(tmp_path, checkout)
     try:
-        result = await rig.repro("exit 1\n")  # reproduced
+        result = await rig.repro("exit 1\n")
         executor = rig.toolbox._executor  # type: ignore[attr-defined]
 
-        with pytest.raises(ResultUnverified, match="repro_verdict: recorded 'not_reproduced'"):
-            await executor.reverify(replace(result, repro_verdict="not_reproduced"))
+        with pytest.raises(ResultUnverified, match="case_exit_code: recorded 0, the bundle says 1"):
+            await executor.reverify(replace(result, case_exit_code=0))
 
         archived = next(
             Path(rig.toolbox.backend.journal.latest(result.request_id).extra["archive"]).rglob("verdict.json")
         )
         archived.chmod(0o644)
-        archived.write_text(json.dumps({"verdict": "not_reproduced", "exit_code": 0}))
+        archived.write_text(json.dumps({"exit_code": 0}))
         with pytest.raises(ResultUnverified, match="bundle was rejected"):
             await executor.reverify(result)
     finally:
@@ -195,7 +195,7 @@ async def test_an_attachment_put_through_the_toolbox_is_the_case_a_repro_request
         entry = rig.toolbox._log.get(request_id)
         assert entry is not None and entry.outcome is not None and "result" in entry.outcome, entry
         result = TestResult.from_document(entry.outcome["result"])
-        assert result.validity is Validity.SUCCEEDED and result.repro_verdict == "reproduced", result
+        assert result.validity is Validity.SUCCEEDED and result.case_exit_code == 1, result
     finally:
         await rig.toolbox.close()
 

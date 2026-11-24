@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from hyperloom_common.llm import llm_config
-from hyperloom.contracts.measurement import NOT_REPRODUCED, REPRODUCED
 from hyperloom.contracts.recipe import ConfigDelta, RecipeDelta
 from hyperloom_multibranch.contracts.judgement import AccuracyVerdict, Judgement, Verdict
 from hyperloom_multibranch.contracts.llm_prices import TokenCounts, price_of
@@ -25,6 +24,7 @@ from hyperloom_multibranch.rulegate.critic import (
     anthropic_critic,
 )
 from hyperloom_multibranch.rulegate.fix_case import FixCase
+from hyperloom_multibranch.rulegate.regression import NOT_REPRODUCED, REPRODUCED
 
 WORKLOAD = "qwen3-8b on vllm, ISL 8192, OSL 1024, concurrency 64"
 CHANGE = RecipeDelta(config=ConfigDelta(server_args="--kv-cache-dtype fp8"))

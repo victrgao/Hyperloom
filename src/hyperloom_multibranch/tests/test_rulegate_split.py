@@ -8,8 +8,6 @@ from dataclasses import dataclass
 import pytest
 
 from hyperloom.contracts.measurement import (
-    NOT_REPRODUCED,
-    REPRODUCED,
     AttachmentRef,
     Purpose,
     TestKind,
@@ -26,7 +24,7 @@ from hyperloom_multibranch.blackboard import LocalBlackboard
 from hyperloom_multibranch.blackboard.tests.factories import delta, intent, request, result
 from hyperloom_multibranch.rulegate.fix_case import FIX_CASE_ID
 from hyperloom_multibranch.rulegate.gate import RuleGate
-from hyperloom_multibranch.rulegate.regression import FixProof, ReproRun
+from hyperloom_multibranch.rulegate.regression import NOT_REPRODUCED, REPRODUCED, FixProof, ReproRun
 from hyperloom_multibranch.tests.fakes import InMemoryRepo, RecordingScheduler, RecordingVerifier
 
 BASELINE = Recipe("rocm/vllm@sha256:" + "c" * 64, LaunchConfig(server_args="--max-num-seqs 128"))
@@ -86,7 +84,7 @@ async def _rig(root, status: AdmissionStatus = AdmissionStatus.ACCEPTED, wrap=No
     await toolbox.write_result(result("r1"))
     clean = request("p1", intent(BRANCH, ROOT), kind=TestKind.REPRO, purpose=Purpose.REPRO, attachments=(CASE,))
     await toolbox.write_request(clean)
-    await toolbox.write_result(TestResult("p1", Validity.SUCCEEDED, repro_verdict=NOT_REPRODUCED))
+    await toolbox.write_result(TestResult("p1", Validity.SUCCEEDED, case_exit_code=0))
     scheduler = LocalBlackboard(root, Writer(Role.SCHEDULER, "scheduler"))
     await scheduler.record_lineage(LineageEvent(LineageKind.ROOT, INTEGRATION_BRANCH, commit_id=ROOT))
     await scheduler.record_lineage(LineageEvent(LineageKind.OPEN, BRANCH, from_commit=ROOT))

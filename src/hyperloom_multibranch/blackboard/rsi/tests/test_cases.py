@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from hyperloom.contracts.measurement import REPRODUCED, AttachmentRef, Purpose, TestKind, TestRequest
+from hyperloom.contracts.measurement import AttachmentRef, Purpose, TestKind, TestRequest
 from hyperloom.contracts.recipe import RecipeDelta
 from hyperloom.measure.compile import LocalBlobStore
 from hyperloom.measure.pins import IMAGE_DIGEST_VAR, IMAGE_REF_VAR
@@ -176,7 +176,7 @@ async def test_a_brief_names_a_pooled_case_that_reproduced_on_the_root_as_a_defe
         TestKind.REPRO, Purpose.REPRO, INTEGRATION_BRANCH, "c0", RecipeDelta(), attachments=case, request_id="p9"
     )
     await toolbox.write_request(repro)
-    await toolbox.write_result(dataclasses.replace(result("p9"), repro_verdict=REPRODUCED))
+    await toolbox.write_result(dataclasses.replace(result("p9"), case_exit_code=1))
 
     brief = await CrossSessionBriefing(
         blackboard, recalls=RecallCache(), champions={}, refused={}, cases=pool

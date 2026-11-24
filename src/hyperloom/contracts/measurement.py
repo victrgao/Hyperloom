@@ -76,10 +76,8 @@ _MAX_UNIX_TIME = 1.0e11
 
 _ACCURACY = "accuracy"
 _FAILURE_CLASS = "failure_class"
-#: The verdicts of a ``repro`` test: the case's failure is still there, or the case ran clean.
-REPRODUCED = "reproduced"
-NOT_REPRODUCED = "not_reproduced"
-REPRO_VERDICTS = (REPRODUCED, NOT_REPRODUCED)
+#: The exit code behind the ``repro_verdict`` a result document carried before it recorded the code itself.
+_EXIT_CODE_OF_VERDICT = {"not_reproduced": 0, "reproduced": 1}
 #: What a test's server did with one kernel table the test loaded: some of its rows were hit, none was although hits
 #: were logged, or the logs cannot say. "Not exercised" and "not observable" are different findings: the first says the
 #: table changed nothing the test ran, the second says nothing about it.
@@ -106,7 +104,11 @@ _REQUEST_COUNTS = (
 
 
 class TestKind(str, Enum):
-    """The kind of test; ``SWEEP`` runs a candidate over the workload's whole concurrency range (final selection)."""
+    """The kind of test; ``SWEEP`` runs a candidate over the workload's whole concurrency range (final selection).
+
+    ``REPRO`` runs a case, a script from the request's attachments, on the candidate and measures nothing: its result
+    is the script's exit code and what it printed.
+    """
 
     __test__ = False
 
@@ -252,7 +254,7 @@ class TestRequest:
         if self.kind is TestKind.ACCURACY and not self.accuracy:
             raise MeasurementError("an 'accuracy' test only evaluates accuracy: accuracy must be true")
         if self.kind is TestKind.REPRO and not self.attachments:
-            raise MeasurementError("a 'repro' test needs the reproduction case as an attachment")
+            raise MeasurementError("a 'repro' test needs its case as an attachment")
         if len(self.concurrency) > 1 and self.kind not in (TestKind.TEST, TestKind.SWEEP):
             raise MeasurementError(f"several concurrency values are only for 'test' requests, not {self.kind.value!r}")
 
@@ -883,8 +885,9 @@ class TestResult:
     The timing, cost and profile fields are what the blackboard asks of the toolbox beyond the measurement itself.
     ``cold_start_seconds`` is how long the test's server took from its spawn to be ready, measured by the sandbox that
     ran it; ``None`` when the test booted none or nothing recorded it.
-    ``repro_verdict`` is the one outcome of a ``repro`` test: ``""`` for any other test, ``"reproduced"`` or
-    ``"not_reproduced"`` for a repro test that ran its case to the end (``SUCCEEDED`` only).
+    ``case_exit_code`` is the one outcome of a ``repro`` test: ``None`` for any other test, the exit code of the case for
+    a repro test that ran it (``SUCCEEDED`` only), negative for a case a signal ended. What the code means is its
+    requester's to say. A document written before the code was recorded carries ``repro_verdict`` in its place.
     ``table_hits`` has one entry for each kernel table the test's recipe loaded, and ``runtime_findings`` says what each
     entry means in a sentence; a succeeded test that loaded none has neither. ``TableHits`` tells "the table was not
     exercised" from "the logs cannot say", which a flat result alone cannot.
@@ -933,7 +936,7 @@ class TestResult:
     finished_at: float | None = None
     gpu_seconds: float = 0.0
     profile_location: str = ""
-    repro_verdict: str = ""
+    case_exit_code: int | None = None
     nonfatal_warnings: tuple[str, ...] = ()
     cold_start_seconds: float | None = None
     table_hits: tuple[TableHits, ...] = ()
@@ -966,7 +969,7 @@ class TestResult:
         cold_start = _optional_number(self.cold_start_seconds, "cold_start_seconds")
         if cold_start is not None and cold_start < 0:
             raise MeasurementError(f"cold_start_seconds cannot be negative, got {cold_start}")
-        self._check_repro_verdict()
+        self._check_case_exit_code()
         _strings(self.nonfatal_warnings, "nonfatal_warnings")
         _strings(self.runtime_findings, "runtime_findings")
         if not isinstance(self.table_hits, tuple) or not all(isinstance(t, TableHits) for t in self.table_hits):
@@ -991,11 +994,10 @@ class TestResult:
             if value is not None and not isinstance(value, kind):
                 raise MeasurementError(f"{name} must be a {kind.__name__}, got {value!r}")
 
-    def _check_repro_verdict(self) -> None:
-        if self.repro_verdict not in ("", *REPRO_VERDICTS):
-            raise MeasurementError(f"repro_verdict must be '' or one of {REPRO_VERDICTS}, got {self.repro_verdict!r}")
-        if self.repro_verdict and self.validity is not Validity.SUCCEEDED:
-            raise MeasurementError("only a succeeded test has a repro_verdict: a case that did not run has no verdict")
+    def _check_case_exit_code(self) -> None:
+        code = _optional_int(self.case_exit_code, "case_exit_code", minimum=-255)
+        if code is not None and self.validity is not Validity.SUCCEEDED:
+            raise MeasurementError("only a succeeded test has a case_exit_code: a case that did not run has none")
 
     def _check_validity(self) -> None:
         if self.validity is Validity.SUCCEEDED:
@@ -1035,7 +1037,7 @@ class TestResult:
             "finished_at": self.finished_at,
             "gpu_seconds": self.gpu_seconds,
             "profile_location": self.profile_location,
-            "repro_verdict": self.repro_verdict,
+            "case_exit_code": self.case_exit_code,
             "nonfatal_warnings": list(self.nonfatal_warnings),
             "cold_start_seconds": self.cold_start_seconds,
             "table_hits": [value.to_document() for value in self.table_hits],
@@ -1078,7 +1080,7 @@ class TestResult:
             finished_at=f.get("finished_at"),
             gpu_seconds=f.get("gpu_seconds", 0.0),
             profile_location=f.get("profile_location", ""),
-            repro_verdict=f.get("repro_verdict", ""),
+            case_exit_code=f.get("case_exit_code", _EXIT_CODE_OF_VERDICT.get(f.get("repro_verdict", ""))),
             nonfatal_warnings=tuple(_items(f.get("nonfatal_warnings", ()), "nonfatal_warnings")),
             cold_start_seconds=f.get("cold_start_seconds"),
             table_hits=tuple(map(TableHits.from_document, _items(f.get("table_hits", ()), "table_hits"))),
@@ -1101,11 +1103,8 @@ __all__ = [
     "CARD_OCCUPANCY_STATES",
     "CARD_UNKNOWN",
     "CARD_UNOBSERVABLE",
-    "NOT_REPRODUCED",
     "PRIORITY_HIGHEST",
     "PRIORITY_LOWEST",
-    "REPRODUCED",
-    "REPRO_VERDICTS",
     "TABLE_EXERCISED",
     "TABLE_NOT_EXERCISED",
     "TABLE_NOT_OBSERVABLE",

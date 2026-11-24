@@ -32,6 +32,9 @@ from hyperloom_multibranch.rulegate.critic import CriticVerdict, FixReview
 #: How a :class:`ReproToolbox` ends a test: the case's verdict (empty for a success without one), the validity it
 #: failed with, or ``None`` to withdraw it.
 ReproAnswer = str | Validity | None
+#: The exit code a case leaves for each verdict the tests answer with; any other answer is a broken case's.
+_EXIT_CODES = {regression.NOT_REPRODUCED: 0, regression.REPRODUCED: 1}
+_BROKEN_CASE = 2
 
 
 class InMemoryRepo:
@@ -176,7 +179,13 @@ class ReproToolbox:
         else:
             ran = {"started_at": 0.0, "finished_at": self.seconds(request)}
             await self.blackboard.write_result(
-                TestResult(request_id, Validity.SUCCEEDED, manifest_sha256="a" * 64, repro_verdict=answer, **ran)
+                TestResult(
+                    request_id,
+                    Validity.SUCCEEDED,
+                    manifest_sha256="a" * 64,
+                    case_exit_code=_EXIT_CODES.get(answer, _BROKEN_CASE),
+                    **ran,
+                )
             )
 
     async def cancel(self, request_id: str) -> CancelOutcome:

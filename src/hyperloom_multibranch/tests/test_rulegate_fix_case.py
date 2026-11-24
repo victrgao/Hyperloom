@@ -71,7 +71,8 @@ def test_the_runner_finds_the_case_script(tmp_path):
     _place(tmp_path)
 
     assert repro.CASE_SCRIPT == CASE_SCRIPT
-    assert repro.find_case(tmp_path, [FIX_CASE_ID, OTHER.id]) == tmp_path / FIX_CASE_ID / CASE_SCRIPT
+    found = repro.find_case(tmp_path, [FIX_CASE_ID, OTHER.id])
+    assert found == repro.Case(tmp_path / FIX_CASE_ID / CASE_SCRIPT, needs_server=True)
 
 
 @pytest.mark.parametrize(("script", "diagnosis"), [(" \n", DIAGNOSIS), (SCRIPT, "")])

@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from hyperloom.contracts.measurement import REPRODUCED, TestKind
+from hyperloom.contracts.measurement import TestKind
 from hyperloom.measure.compile import BlobError, BlobStore
 from hyperloom.measure.pins import ImagePinError, active_image
 from hyperloom_multibranch.contracts.blackboard import INTEGRATION_BRANCH, NotRecorded
@@ -33,6 +33,7 @@ from hyperloom_common.shared_storage import ownership
 from hyperloom_multibranch.blackboard.local.files import encode_json, publish_once
 from hyperloom_multibranch.blackboard.rsi.archive import TreeArchive
 from hyperloom_multibranch.rulegate.fix_case import CaseError, case_of, pack_case, read_case
+from hyperloom_multibranch.rulegate.regression import REPRODUCED, verdict_of
 from hyperloom_multibranch.rulegate.regression import PooledCase
 
 log = logging.getLogger(__name__)
@@ -177,8 +178,7 @@ def known_defects(snapshot: BlackboardSnapshot, pool: CasePool) -> tuple[PoolEnt
         for record in snapshot.records
         if record.request.kind is TestKind.REPRO
         and (record.request.branch_id, record.request.parent_commit) == (INTEGRATION_BRANCH, root)
-        and record.result is not None
-        and record.result.repro_verdict == REPRODUCED
+        and verdict_of(record) == REPRODUCED
         for item in record.request.attachments
     }
     found: dict[str, PoolEntry] = {}

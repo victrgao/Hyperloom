@@ -12,8 +12,6 @@ import pytest
 from hyperloom.common.gain_math import ACCURACY_METRICS
 from hyperloom.common.perf_metric import GRADED_OUTPUT
 from hyperloom.contracts.measurement import (
-    NOT_REPRODUCED,
-    REPRODUCED,
     AttachmentRef,
     Purpose,
     TestKind,
@@ -39,7 +37,7 @@ from hyperloom_multibranch.rulegate.gate import RuleGate
 from hyperloom_multibranch.rulegate.inferencex import DROPPED_REQUESTS, GAIN_NOT_CONFIRMED
 from hyperloom_multibranch.rulegate.critic import CriticVerdict, FixReview
 from hyperloom_multibranch.rulegate.fix_case import FIX_CASE_ID, pack_case
-from hyperloom_multibranch.rulegate.regression import ReproRunner
+from hyperloom_multibranch.rulegate.regression import NOT_REPRODUCED, REPRODUCED, ReproRunner
 from hyperloom_multibranch.rulegate.rules import RETRACTION_ID, InferenceXRule
 from hyperloom_multibranch.specialist.fix_check import FixChecking, declares_fix
 from hyperloom_multibranch.specialist.judging import NOTICE, BranchJudge, Judging

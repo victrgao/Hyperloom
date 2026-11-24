@@ -42,17 +42,17 @@ async def _repro(tmp_path: Path, rig: Rig, script: str = "exit 1\n", **fake: obj
     return executor, await executor.run(_job(tmp_path, rig, script, **fake))
 
 
-@pytest.mark.parametrize(("script", "verdict"), [("exit 0\n", "not_reproduced"), ("exit 1\n", "reproduced")])
-async def test_a_repro_test_with_a_signed_verdict_is_a_result_with_the_verdict_and_no_measurement(
-    tmp_path: Path, rig: Rig, script: str, verdict: str
+@pytest.mark.parametrize("code", [0, 1, 4])
+async def test_a_repro_test_with_a_signed_exit_code_is_a_result_with_the_code_and_no_measurement(
+    tmp_path: Path, rig: Rig, code: int
 ) -> None:
-    _, result = await _repro(tmp_path, rig, script, fake_report="false")
+    _, result = await _repro(tmp_path, rig, f"exit {code}\n", fake_report="false")
 
     assert result.validity is Validity.SUCCEEDED and result.manifest_sha256
-    assert result.repro_verdict == verdict
+    assert result.case_exit_code == code
     assert result.rounds == () and result.accuracy == () and result.profile_location == ""
     log = tmp_path / "session" / result.output_dir / "repro" / "case.log"
-    assert log.is_file(), "the case's log tail lands in the session with the verdict"
+    assert log.is_file(), "the case's log tail lands in the session with the exit code"
 
 
 async def test_the_numbers_a_repro_server_printed_are_not_reported(tmp_path: Path, rig: Rig) -> None:
@@ -73,20 +73,20 @@ async def test_the_case_reaches_the_sandbox_as_an_attachment_and_runs_there_with
     assert (tmp_path / "session" / result.output_dir / "repro" / "case.log").read_text() == "from-the-attachment\n"
 
 
-async def test_a_repro_result_that_holds_no_verdict_is_refused(tmp_path: Path, rig: Rig) -> None:
+async def test_a_repro_result_that_holds_no_exit_code_is_refused(tmp_path: Path, rig: Rig) -> None:
     executor = HostedExecutor(rig.backend, tmp_path / "session")
 
-    with pytest.raises(MeasurementRefused, match="holds no verdict"):
+    with pytest.raises(MeasurementRefused, match="holds no exit code"):
         await executor.run(_job(tmp_path, rig, "exit 0\n", fake_report="false"))  # the sandbox ran no case
 
 
-async def test_a_plain_test_has_no_repro_verdict_and_ships_no_attachment(tmp_path: Path, rig: Rig) -> None:
+async def test_a_plain_test_has_no_case_exit_code_and_ships_no_attachment(tmp_path: Path, rig: Rig) -> None:
     spy = BackendSpy(rig.backend)
     result = await HostedExecutor(spy, tmp_path / "session").run(  # type: ignore[arg-type]
         _job(tmp_path, rig, "", kind=TestKind.TEST)
     )
 
-    assert result.repro_verdict == "" and spy.calls[0].attachments == ()
+    assert result.case_exit_code is None and spy.calls[0].attachments == ()
 
 
 async def test_a_repro_result_verifies_again_from_its_bundle(tmp_path: Path, rig: Rig) -> None:
@@ -98,8 +98,8 @@ async def test_a_repro_result_verifies_again_from_its_bundle(tmp_path: Path, rig
 @pytest.mark.parametrize(
     ("change", "match"),
     [
-        (lambda r: replace(r, repro_verdict="not_reproduced"), "repro_verdict: recorded 'not_reproduced'"),
-        (lambda r: replace(r, repro_verdict=""), "repro_verdict: recorded ''"),
+        (lambda r: replace(r, case_exit_code=0), "case_exit_code: recorded 0"),
+        (lambda r: replace(r, case_exit_code=None), "case_exit_code: recorded None"),
         (
             lambda r: replace(r, rounds=(RoundValue("measure", None, {"output_throughput": 1.0}),)),
             "records no measured",
@@ -109,16 +109,16 @@ async def test_a_repro_result_verifies_again_from_its_bundle(tmp_path: Path, rig
 async def test_a_repro_record_that_does_not_follow_its_bundle_is_not_verified(
     tmp_path: Path, rig: Rig, change, match
 ) -> None:  # type: ignore[no-untyped-def]
-    executor, result = await _repro(tmp_path, rig, "exit 1\n", fake_report="false")  # the bundle says reproduced
+    executor, result = await _repro(tmp_path, rig, "exit 1\n", fake_report="false")
 
     with pytest.raises(ResultUnverified, match=match):
         await executor.reverify(change(result))
 
 
-async def test_a_verdict_forged_onto_a_bundle_with_no_verdict_file_is_not_verified(tmp_path: Path, rig: Rig) -> None:
+async def test_an_exit_code_forged_onto_a_bundle_with_none_is_not_verified(tmp_path: Path, rig: Rig) -> None:
     executor, _ = await _repro(tmp_path, rig)
     plain = await executor.run(_job(tmp_path, rig, "", kind=TestKind.TEST, fake_report="true"))
-    forged: TestResult = replace(plain, repro_verdict="not_reproduced", rounds=())
+    forged: TestResult = replace(plain, case_exit_code=0, rounds=())
 
-    with pytest.raises(ResultUnverified, match="lists no verdict file"):
+    with pytest.raises(ResultUnverified, match="lists no exit code file"):
         await executor.reverify(forged)

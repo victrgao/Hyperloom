@@ -18,7 +18,7 @@ with that score (``none``: a round that holds no score), and ``fake_accuracy_ret
 under the outcome's success, which the runner never writes. ``fake_trace: true`` adds the torch-profiler trace a profile
 test leaves (``profile/torch_trace/...``), ``capture_only`` only a CUDA-graph capture sidecar; ``fake_report: false`` leaves out the round's report, as a profiled round
 that printed no readable measurement. ``fake_repro: true`` runs the repro case the sheet carries for real (the shipped
-attachment placement and ``run_case``) against no server, and lists the verdict and log it leaves in the manifest.
+attachment placement and ``run_case``) against no server, and lists the exit code and log it leaves in the manifest.
 ``fake_attached_env: [NAME, ...]`` places the sheet's attachments as the runner does and lists, in
 ``attached_env.json``, the path each variable holds in the served YAML, the sha256 of the file there, and the sha256 of
 every file in the directory it is in (``directory``; a directory attachment beside it is left out).
@@ -246,10 +246,11 @@ def _attached_env_files(spec: MeasurementSpec, root: Path, out: Path, names: lis
 def _repro_files(spec: MeasurementSpec, root: Path, out: Path) -> dict[str, bytes]:
     """Place the sheet's attachments, run its case and return what it left below ``<out>/files/repro``."""
     placed = _place(spec, root)
-    script = find_case(root / "work" / "attach", list(placed))
-    run_case(script, base_url="http://127.0.0.1:1", model="fake-model", timeout_sec=30, output_dir=out / "files")
+    script = find_case(root / "work" / "attach", list(placed)).script
+    run_case(script, env={"PATH": os.environ["PATH"]}, timeout_sec=30, output_dir=out / "files")
     directory = out / "files" / REPRO_DIR
-    return {f"{REPRO_DIR}/{p.name}": p.read_bytes() for p in sorted(directory.iterdir())}
+    left = sorted(p for p in directory.rglob("*") if p.is_file())
+    return {f"{REPRO_DIR}/{p.relative_to(directory)}": p.read_bytes() for p in left}
 
 
 JIT_KEY = "a" * 64

@@ -7,8 +7,6 @@ import dataclasses
 import pytest
 
 from hyperloom.contracts.measurement import (
-    NOT_REPRODUCED,
-    REPRODUCED,
     AttachmentRef,
     Purpose,
     TestKind,
@@ -26,7 +24,7 @@ from hyperloom_multibranch.blackboard import LocalBlackboard
 from hyperloom_multibranch.blackboard.tests.factories import intent, request, result
 from hyperloom_multibranch.rulegate.decision import Action
 from hyperloom_multibranch.rulegate.gate import RuleGate
-from hyperloom_multibranch.rulegate.regression import FixProof, ReproRun
+from hyperloom_multibranch.rulegate.regression import NOT_REPRODUCED, REPRODUCED, FixProof, ReproRun
 from hyperloom_multibranch.tests.fakes import InMemoryRepo, RecordingScheduler, RecordingVerifier
 
 BASELINE = Recipe("rocm/vllm@sha256:" + "c" * 64, LaunchConfig(server_args="--max-num-seqs 128"))
@@ -270,7 +268,7 @@ async def _proven(root) -> FixProof:
     toolbox = LocalBlackboard(root, Writer(Role.TOOLBOX, "toolbox"))
     clean = request("p1", GEMM, kind=TestKind.REPRO, purpose=Purpose.REPRO, attachments=OVERFLOW)
     await toolbox.write_request(clean)
-    await toolbox.write_result(TestResult("p1", Validity.SUCCEEDED, repro_verdict=NOT_REPRODUCED))
+    await toolbox.write_result(TestResult("p1", Validity.SUCCEEDED, case_exit_code=0))
     reproduced = ReproRun("p0", verdict=REPRODUCED)
     return FixProof(reproduced, ReproRun("p1", verdict=NOT_REPRODUCED), reproduced)
 

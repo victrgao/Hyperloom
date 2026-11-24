@@ -8,8 +8,6 @@ import re
 import pytest
 
 from hyperloom.contracts.measurement import (
-    NOT_REPRODUCED,
-    REPRODUCED,
     AttachmentRef,
     Purpose,
     TestKind,
@@ -33,6 +31,8 @@ from hyperloom_multibranch.blackboard.tests.factories import delta, judgement, r
 from hyperloom_multibranch.rulegate.fix_case import FIX_CASE_ID
 from hyperloom_multibranch.rulegate import regression
 from hyperloom_multibranch.rulegate.regression import (
+    NOT_REPRODUCED,
+    REPRODUCED,
     POLL_SECONDS,
     RESUBMIT_SECONDS,
     FixNotProven,
@@ -163,7 +163,7 @@ async def test_the_runner_waits_for_the_test_to_end(tmp_path, sleeps):
     [
         (None, "withdrawn (the branch was stopped)"),
         (Validity.CANDIDATE_FAILED, "ended candidate_failed (the server did not start)"),
-        ("", "succeeded without a verdict"),
+        ("", "its case exited with 2: neither 0 nor 1"),
     ],
 )
 async def test_a_case_that_ran_to_no_verdict_says_why(tmp_path, answer, failure):
@@ -309,7 +309,7 @@ async def test_each_case_of_the_base_and_the_sources_runs_once_on_the_candidate_
         (REPRODUCED, "fp8_overflow: reproduced"),
         (None, "fp8_overflow: withdrawn (the branch was stopped)"),
         (Validity.CANDIDATE_FAILED, "fp8_overflow: ended candidate_failed (the server did not start)"),
-        ("", "fp8_overflow: succeeded without a verdict"),
+        ("", "fp8_overflow: its case exited with 2: neither 0 nor 1"),
     ],
 )
 async def test_a_case_that_does_not_run_clean_fails_the_set_with_its_cause(session, answer, cause):

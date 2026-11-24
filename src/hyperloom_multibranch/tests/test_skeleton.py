@@ -44,8 +44,6 @@ from hyperloom.common.outside_facts.image_check import FactResult, ImageCheckFai
 from hyperloom.common.outside_facts.image_check_eval import Status
 from hyperloom.common.outside_facts.rule_pack import rule_pack_identity
 from hyperloom.contracts.measurement import (
-    NOT_REPRODUCED,
-    REPRODUCED,
     AttachmentRef,
     Purpose,
     TestKind,
@@ -116,7 +114,7 @@ from hyperloom_multibranch.rulegate.fix_case import FIX_CASE_ID, FixCase
 from hyperloom_multibranch.rulegate.gate import RuleGate
 from hyperloom_multibranch.rulegate import regression
 from hyperloom_multibranch.rulegate.inferencex import BASELINE_TESTS
-from hyperloom_multibranch.rulegate.regression import FixProof, ReproRun
+from hyperloom_multibranch.rulegate.regression import NOT_REPRODUCED, REPRODUCED, FixProof, ReproRun
 from hyperloom_multibranch.scheduling.budget import (
     MB_SECONDS_PER_HOUR,
     SessionBudget,
@@ -555,7 +553,7 @@ class Stage:
         await toolbox.write_request(candidate)
         await toolbox.write_result(TestResult(candidate.request_id, Validity.SUCCEEDED))
         await toolbox.write_request(clean)
-        await toolbox.write_result(TestResult(case, Validity.SUCCEEDED, repro_verdict=NOT_REPRODUCED))
+        await toolbox.write_result(TestResult(case, Validity.SUCCEEDED, case_exit_code=0))
         regressed = Judgement(
             Verdict.REGRESSED,
             -2.0,

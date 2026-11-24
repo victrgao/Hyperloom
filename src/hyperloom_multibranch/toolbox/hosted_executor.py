@@ -62,7 +62,7 @@ from hyperloom.measure.manifest import ResultManifest
 from hyperloom.measure.phases import RESULT_READ, account
 from hyperloom.measure.points import AcceptedMeasurement
 from hyperloom.measure.profile_traces import PROFILE_DIR, has_step_traces, has_traces, is_trace_file
-from hyperloom.measure.repro import REPRO_DIR, VERDICT_FILE, ReproError, read_verdict
+from hyperloom.measure.repro import EXIT_FILE, REPRO_DIR, ReproError, read_exit_code
 from hyperloom.measure.consistency import SessionNotMeasurable, session_facts
 from hyperloom.measure.socket import (
     MeasurementTimeout,
@@ -351,7 +351,7 @@ class HostedExecutor:
         finished = self._clock()
         rounds, accuracy = _measured_values(request, accepted, outcome) if failure is None else ((), ())
         location = self._profile_location(call) if failure is None and request.kind is TestKind.PROFILE else ""
-        verdict = _landed_verdict(call) if failure is None and request.kind is TestKind.REPRO else ""
+        exit_code = _landed_exit_code(call) if failure is None and request.kind is TestKind.REPRO else None
         # What the attempt's directory holds counts only when a verified bundle landed it: an attempt that ended without
         # one holds at most the host's saved copy of its runner's files, which is never a sample, a ruling or a check.
         landed = Path(call.output_dir) if audit else None
@@ -370,7 +370,7 @@ class HostedExecutor:
             finished_at=finished,
             gpu_seconds=gpu_seconds,
             profile_location=location,
-            repro_verdict=verdict,
+            case_exit_code=exit_code,
             nonfatal_warnings=(
                 *_warnings_of(outcome.rounds),
                 *_card_warnings(facts.card_occupancy, facts.card_occupancy_reason),
@@ -599,7 +599,7 @@ def _unlike_values(result: TestResult, derived: Reverified, landed: Path) -> str
         )
     if result.profile_location:
         return _profile_difference(result, derived.manifest)
-    if result.repro_verdict or _lists_verdict(derived.manifest):
+    if result.case_exit_code is not None or _lists_exit_code(derived.manifest):
         return _repro_difference(result, derived.manifest, landed)
     values = _round_values_at(derived.rounds, tuple(_concurrency_in(text) for text in derived.point_yaml))
     return first_value_difference(result, values, _scores_of(derived.rounds))
@@ -617,22 +617,22 @@ def _profile_difference(result: TestResult, manifest: ResultManifest) -> str | N
     return None
 
 
-def _lists_verdict(manifest: ResultManifest) -> bool:
-    return any(f.path == f"{REPRO_DIR}/{VERDICT_FILE}" for f in manifest.files)
+def _lists_exit_code(manifest: ResultManifest) -> bool:
+    return any(f.path == f"{REPRO_DIR}/{EXIT_FILE}" for f in manifest.files)
 
 
 def _repro_difference(result: TestResult, manifest: ResultManifest, landed: Path) -> str | None:
-    """A repro result holds no measured value and says what the signed verdict file says, no more and no less."""
+    """A repro result holds no measured value and the exit code the signed bundle holds, no other."""
     if result.rounds or result.accuracy:
         return "rounds: a repro result records no measured value"
-    if not _lists_verdict(manifest):
-        return "repro_verdict: the bundle lists no verdict file"
+    if not _lists_exit_code(manifest):
+        return "case_exit_code: the bundle lists no exit code file"
     try:
-        signed = read_verdict(landed)
+        signed = read_exit_code(landed)
     except ReproError as exc:
-        return f"repro_verdict: {exc}"
-    if result.repro_verdict != signed:
-        return f"repro_verdict: recorded {result.repro_verdict!r}, the bundle says {signed!r}"
+        return f"case_exit_code: {exc}"
+    if result.case_exit_code != signed:
+        return f"case_exit_code: recorded {result.case_exit_code!r}, the bundle says {signed!r}"
     return None
 
 
@@ -660,7 +660,7 @@ def _measured_values(
 
     A profile test reports none: its one round ran with the profiler on, so its numbers are not a measurement and the
     rule gate, which reads measure-phase rounds, finds nothing to compare. A repro test measures nothing either: it
-    reports a verdict. Every other kind must hold a readable measured round.
+    reports its case's exit code. Every other kind must hold a readable measured round.
     """
     if request.kind in UNMEASURED_KINDS:
         return (), ()
@@ -670,12 +670,12 @@ def _measured_values(
     return rounds, _accuracy_values(outcome.rounds, wanted=request.accuracy)
 
 
-def _landed_verdict(call: TestCall) -> str:
-    """The verdict of a repro test, read from the files its verified bundle landed; none is no result."""
+def _landed_exit_code(call: TestCall) -> int:
+    """The exit code of a repro test's case, read from the files its verified bundle landed; none is no result."""
     try:
-        return read_verdict(Path(call.output_dir))
+        return read_exit_code(Path(call.output_dir))
     except ReproError as exc:
-        raise MeasurementRefused(f"the verified repro result holds no verdict: {exc}") from None
+        raise MeasurementRefused(f"the verified repro result holds no exit code: {exc}") from None
 
 
 def _refuse_unless_measured(outcome: TestOutcome) -> None:

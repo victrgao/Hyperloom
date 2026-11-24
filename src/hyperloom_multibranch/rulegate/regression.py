@@ -4,8 +4,10 @@
 """Correctness fixes and their reproduction cases.
 
 A reproduction case is the attachments of a repro test: a directory with a ``repro.sh`` at its top, whose verdict on a
-commit is ``reproduced`` (the failure occurs) or ``not_reproduced`` (it ran clean). :class:`ReproRunner` is the one
-place that submits repro tests; :class:`RegressionSet` runs the cases of every fix a commit builds on, and the cases
+commit is ``reproduced`` (the failure occurs) or ``not_reproduced`` (it ran clean). The verdict is this module's
+reading of the case's exit code (:func:`verdict_of`), and only of a test the gate asked for: a specialist's probe
+runs a case too, and its exit code is never a verdict. :class:`ReproRunner` is the one
+place that submits the gate's repro tests; :class:`RegressionSet` runs the cases of every fix a commit builds on, and the cases
 other sessions on the same image and model registered (:class:`CasePool`) that run clean on the root. For FINAL it
 runs every case the session registered, whether a candidate builds on the case's fix or not.
 """
@@ -20,8 +22,6 @@ from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
 from hyperloom.contracts.measurement import (
-    NOT_REPRODUCED,
-    REPRODUCED,
     AttachmentRef,
     Purpose,
     TestKind,
@@ -45,6 +45,10 @@ POLL_SECONDS = 5.0
 #: Seconds before a repro test the toolbox refused with backpressure is submitted again.
 RESUBMIT_SECONDS = 30.0
 NO_DELTA = RecipeDelta()
+#: The verdicts of a case, by its exit code: it ran clean, or its failure is still there.
+NOT_REPRODUCED = "not_reproduced"
+REPRODUCED = "reproduced"
+_VERDICT_OF_EXIT_CODE = {0: NOT_REPRODUCED, 1: REPRODUCED}
 
 T = TypeVar("T")
 
@@ -79,6 +83,15 @@ class ReproRun:
         """The verdict, or what kept the case from one."""
 
         return self.verdict or self.failure
+
+
+def verdict_of(record: TestRecord) -> str:
+    """The verdict of the gate's repro test ``record``: ``""`` when its case left no exit code, exited with a code that
+    is neither verdict (a broken case, one killed), or was not run for the gate."""
+
+    if record.request.purpose is not Purpose.REPRO or record.result is None:
+        return ""
+    return _VERDICT_OF_EXIT_CODE.get(record.result.case_exit_code, "")  # type: ignore[arg-type]
 
 
 async def ended(blackboard: RecordSearch, request_id: str) -> TestRecord:
@@ -145,13 +158,14 @@ class ReproRunner:
         if result.validity is not Validity.SUCCEEDED:
             reason = result.failure_reason or "no reason given"
             return ReproRun(request_id, failure=f"ended {result.validity.value} ({reason})")
-        if not result.repro_verdict:
-            return ReproRun(request_id, failure="succeeded without a verdict")
+        verdict = verdict_of(record)
+        if not verdict:
+            return ReproRun(request_id, failure=f"its case exited with {result.case_exit_code}: neither 0 nor 1")
         try:
             await self._verifier.reverify(request_id)
         except ResultUnverified as error:
             return ReproRun(request_id, failure=str(error))
-        return ReproRun(request_id, verdict=result.repro_verdict)
+        return ReproRun(request_id, verdict=verdict)
 
 
 class RegressionBlackboard(RecordSearch, CommitQuery, GateRecords, Protocol):
@@ -366,8 +380,7 @@ async def register_case(
     """
 
     record = await blackboard.record(repro_request_id)
-    clean = record.result is not None and record.result.repro_verdict == NOT_REPRODUCED
-    if record.request.kind is not TestKind.REPRO or not clean:
+    if record.request.kind is not TestKind.REPRO or verdict_of(record) != NOT_REPRODUCED:
         raise ValueError(f"{repro_request_id} is not a repro test whose case ran clean")
     case_ref = name or ", ".join(attachment.id for attachment in record.request.attachments)
     case = RegressionCase(case_ref, fix_commit, repro_request_id)

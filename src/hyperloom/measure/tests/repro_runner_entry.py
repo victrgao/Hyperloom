@@ -6,7 +6,7 @@
 Started as a local sandbox template's command. ``run_grid`` is where the server would boot; the stand-in answers as a
 boot-only round does (the server is "up" and nothing is measured), or fails the boot when the point says
 ``FAKE_BOOT: fail``. The runner unpacks the attachments, the backend runs the case's ``repro.sh`` and the manifest
-signs what it leaves, all shipped code.
+signs what it leaves, all shipped code. A case that needs no server never reaches the stand-in.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ async def fake_run_grid(
 def main() -> int:
     root = Path(os.environ["HYPERLOOM_SANDBOX_ROOT"])
     local.run_grid = fake_run_grid  # type: ignore[assignment]
-    local._CASE_TIMEOUT_SEC = CASE_TIMEOUT_SEC  # a hanging case ends in seconds, not minutes
+    local.CASE_TIMEOUT_SEC = CASE_TIMEOUT_SEC  # a hanging case ends in seconds, not minutes
     local.resolve_lifecycle_params = lambda path: {  # type: ignore[assignment]
         "eligible": True,
         "port": PORT,
