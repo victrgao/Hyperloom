@@ -179,8 +179,9 @@ _PRIORITIES = range(PRIORITY_HIGHEST, PRIORITY_LOWEST + 1)
 class TestProgress:
     """How far a test that has not finished has got, as the toolbox knows it; a field it cannot tell is ``None``.
 
-    A ``queued`` test has ``queued_ahead``, the waiting tests the queue prefers to it by priority and arrival (a test of
-    a branch at its K is counted, though it may not start first). A ``running`` test has ``running_seconds`` since it
+    A ``queued`` test has ``queued_ahead``, the waiting tests before it in the queue's start order as the branches run
+    now: by priority, then the branch with the fewest tests running, then arrival (a test of a branch at its K is
+    counted, though it may not start first). A ``running`` test has ``running_seconds`` since it
     left the queue and, when its live output can be read, ``last_output_seconds_ago`` (since its newest server or
     benchmark log was written) and ``last_line`` (that log's last non-empty line, cleaned and shortened). A
     ``pending_build`` test waits for the native builds its stack needs and holds no card; ``builds`` has one status per

@@ -77,6 +77,39 @@ def test_a_branch_never_runs_more_than_k() -> None:
     assert queue.take().request_id == "other"  # type: ignore[union-attr]
 
 
+def test_inside_a_priority_the_branch_with_the_fewest_running_tests_starts_next_then_arrival() -> None:
+    queue = _queue(per_branch_k=9, global_concurrency=9)
+    for name in "abcd":
+        queue.push(_item(name))
+    queue.push(_item("x", "b2"))
+    queue.push(_item("y", "b2"))
+    order = []
+    while (item := queue.take()) is not None:
+        order.append(item.request_id)
+    assert order == ["a", "x", "b", "y", "c", "d"]
+
+
+def test_a_new_branchs_first_test_starts_before_the_backlog_of_a_branch_with_tests_running() -> None:
+    queue = _queue(per_branch_k=9, global_concurrency=2)
+    for name in "abcd":
+        queue.push(_item(name))
+    assert [queue.take().request_id, queue.take().request_id] == ["a", "b"]  # type: ignore[union-attr]
+    queue.push(_item("first", "b2"))
+    assert (queue.queued_ahead("first"), queue.queued_ahead("c"), queue.queued_ahead("d")) == (0, 1, 2)
+    queue.remove("a")
+    assert queue.take().request_id == "first"  # type: ignore[union-attr]
+
+
+def test_priority_decides_before_the_running_tests_of_a_branch() -> None:
+    queue = _queue(per_branch_k=9, global_concurrency=9)
+    queue.push(_item("running"))
+    assert queue.take().request_id == "running"  # type: ignore[union-attr]
+    queue.push(_item("explore", "b2"))
+    queue.push(_item("merge", purpose=Purpose.INTEGRATION))
+    queue.push(_item("confirm", purpose=Purpose.CONFIRM, retest_of="running"))
+    assert [queue.take().request_id for _ in range(3)] == ["confirm", "merge", "explore"]  # type: ignore[union-attr]
+
+
 def test_a_confirm_retest_is_not_blocked_by_a_full_k() -> None:
     queue = _queue(per_branch_k=1, global_concurrency=9)
     queue.push(_item("explore"))

@@ -5,7 +5,9 @@
 
 The queue is plain in-memory state with no I/O, so the fake executor and the real one share it. Confirm-retests,
 reproduction checks and session measurements do not count against their branch's K (otherwise K exploration tests
-would starve the retest that decides them), but they do count against the global limit.
+would starve the retest that decides them), but they do count against the global limit. Inside a priority the branch
+with the fewest tests running against its K starts the next test, so a branch's backlog never keeps the cards from
+another branch or from a new branch's first test.
 """
 
 from __future__ import annotations
@@ -146,7 +148,8 @@ WAITING_STATES = frozenset({State.PENDING_BUILD, State.QUEUED})
 
 @dataclass
 class QueuedTest:
-    """One accepted test; ``seq`` is the queue's arrival order and breaks ties inside a priority.
+    """One accepted test; ``seq`` is the queue's arrival order, which decides inside a priority between branches
+    that have as many tests running.
 
     ``started_at`` is when the toolbox took it from the queue to run, ``None`` while it waits.
     """
@@ -169,7 +172,8 @@ class QueuedTest:
 
 
 class WorkQueue:
-    """Priority queue with K accounting; ``take`` hands out the best test the limits allow."""
+    """Priority queue with K accounting; ``take`` hands out the test the limits allow that is first in the start
+    order: by priority, then the branch with the fewest tests running against its K, then arrival."""
 
     def __init__(self, policy: QueuePolicy) -> None:
         self.policy = policy
@@ -239,6 +243,10 @@ class WorkQueue:
             if item.state is State.RUNNING and item.branch == branch and not exempt_from_k(item.request)
         )
 
+    def _start_order(self, item: QueuedTest) -> tuple[int, int, int]:
+        running = 0 if exempt_from_k(item.request) else self._running_counted(item.branch)
+        return item.priority, running, item.seq
+
     def take(self, parallel_limit: int | None = None) -> QueuedTest | None:
         """Mark and return the next test to run, or ``None`` when none may start now.
 
@@ -257,18 +265,17 @@ class WorkQueue:
         ]
         if not ready:
             return None
-        best = min(ready, key=lambda item: (item.priority, item.seq))
+        best = min(ready, key=self._start_order)
         best.state = State.RUNNING
         return best
 
     def queued_ahead(self, request_id: str) -> int:
-        """How many waiting tests ``take`` prefers to ``request_id`` by priority and arrival, whatever their K."""
+        """How many waiting tests are before ``request_id`` in the start order as the branches run now, whatever
+        their K."""
 
-        item = self._items[request_id]
+        mine = self._start_order(self._items[request_id])
         return sum(
-            1
-            for other in self._items.values()
-            if other.state is State.QUEUED and (other.priority, other.seq) < (item.priority, item.seq)
+            1 for other in self._items.values() if other.state is State.QUEUED and self._start_order(other) < mine
         )
 
     def remove(self, request_id: str) -> QueuedTest | None:
